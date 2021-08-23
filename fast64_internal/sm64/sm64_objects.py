@@ -5,8 +5,10 @@ from io import BytesIO
 from .sm64_constants import *
 from .sm64_function_map import func_map
 from .sm64_spline import *
+from .sm64_geolayout_classes import *
 
 from ..utility import *
+from ..f3d.f3d_material import sm64EnumDrawLayers
 
 enumTerrain = [
 	('Custom', 'Custom', 'Custom'),
@@ -132,8 +134,46 @@ enumWaterBoxType = [
 	('Toxic Haze', 'Toxic Haze', 'Toxic Haze')
 ]
 
+class InlineGeolayoutObjConfig:
+	def __init__(
+		self, name, geo_node,
+		can_have_dl=False,
+		must_have_dl=False,
+		must_have_geo=False,
+		uses_location=False,
+		uses_rotation=False,
+		uses_scale=False
+	):
+		self.name = name
+		self.geo_node = geo_node
+		self.can_have_dl = can_have_dl or must_have_dl
+		self.must_have_dl = must_have_dl
+		self.must_have_geo = must_have_geo
+		self.uses_location = uses_location
+		self.uses_rotation = uses_rotation
+		self.uses_scale = uses_scale
+
+inlineGeoLayoutObjects = {
+	'Geo ASM'				: InlineGeolayoutObjConfig('Geo ASM', 				FunctionNode),
+	'Geo Branch'			: InlineGeolayoutObjConfig('Geo Branch', 			JumpNode,
+								must_have_geo=True),
+	'Geo Translate/Rotate'	: InlineGeolayoutObjConfig('Geo Translate/Rotate', 	TranslateRotateNode,
+								can_have_dl=True, uses_location=True, uses_rotation=True),
+	'Geo Translate Node'	: InlineGeolayoutObjConfig('Geo Translate Node', 	TranslateNode,
+								can_have_dl=True, uses_location=True),
+	'Geo Rotation Node'		: InlineGeolayoutObjConfig('Geo Rotation Node', 	RotateNode,
+								can_have_dl=True, uses_rotation=True),
+	'Geo Billboard'			: InlineGeolayoutObjConfig('Geo Billboard', 		BillboardNode,
+								can_have_dl=True, uses_location=True),
+	'Geo Scale'				: InlineGeolayoutObjConfig('Geo Scale', 			ScaleNode,
+								can_have_dl=True, uses_scale=True),
+	'Geo Displaylist'		: InlineGeolayoutObjConfig('Geo Displaylist', 		DisplayListNode,
+								must_have_dl=True),
+	'Custom Geo Command'	: InlineGeolayoutObjConfig('Custom Geo Command', 	CustomNode),
+}
+
 # When adding new types related to geolayout,
-# Make sure to add exceptions in utility.py - selectMeshChildrenOnly
+# Make sure to add exceptions to enumSM64EmptyWithGeolayout
 enumObjectType = [
 	('None', 'None', 'None'),
 	('Level Root', 'Level Root', 'Level Root'),
@@ -147,6 +187,7 @@ enumObjectType = [
 	('Camera Volume', 'Camera Volume', 'Camera Volume'),
 	('Switch', 'Switch Node', 'Switch Node'),
 	('Puppycam Volume', 'Puppycam Volume', 'Puppycam Volume'),
+	*[(key, key, key) for key in inlineGeoLayoutObjects.keys()]
 ]
 
 enumPuppycamMode = [
@@ -781,6 +822,48 @@ class SM64ObjectPanel(bpy.types.Panel):
 	def poll(cls, context):
 		return context.scene.gameEditorMode == "SM64" and (context.object is not None and context.object.data is None)
 
+	def draw_inline_obj(self, box, obj):
+		obj_details: InlineGeolayoutObjConfig = inlineGeoLayoutObjects.get(obj.sm64_obj_type)
+
+		if obj.sm64_obj_type == 'Geo ASM':
+			prop_split(box, obj, 'geoASMFunc', 'Function')
+			prop_split(box, obj, 'geoASMParam', 'Parameter')
+			return
+
+		if obj.sm64_obj_type == 'Custom Geo Command':
+			prop_split(box, obj, 'customGeoCommand', 'Geo Macro')
+			prop_split(box, obj, 'customGeoCommandArgs', 'Parameters')
+			return
+
+		if obj_details.uses_rotation or obj_details.uses_location or obj_details.uses_scale:
+			used_transformations = []
+			if obj_details.uses_location:
+				used_transformations.append('Location')
+			if obj_details.uses_rotation:
+				used_transformations.append('Rotation')
+			if obj_details.uses_scale:
+				used_transformations.append('Scale')
+			info_str = "Note - uses empty object's " + ', '.join(used_transformations)
+			box.box().label(text = info_str)
+		
+		if obj_details.can_have_dl:
+			prop_split(box, obj, 'draw_layer_static', 'Draw Layer')
+
+			if not obj_details.must_have_dl:
+				prop_split(box, obj, 'useDLReference', 'Use DL Reference')
+
+			if obj_details.must_have_dl or obj.useDLReference:
+				# option to specify a mesh instead of string reference
+				prop_split(box, obj, 'dlReference', 'Displaylist variable or hex address')
+
+		if obj_details.must_have_geo:
+			prop_split(box, obj, 'geoReference', 'Geolayout variable or hex address')
+
+		if len(obj.children):
+			b = box.box()
+			b.label(text = 'Children of this object will be simply be the next immediate node.')
+
+
 	def draw(self, context):
 		prop_split(self.layout, context.scene, "gameEditorMode", "Game")
 		box = self.layout.box().column()
@@ -962,6 +1045,9 @@ class SM64ObjectPanel(bpy.types.Panel):
 			prop_split(box, obj, 'switchFunc', 'Function')
 			prop_split(box, obj, 'switchParam', 'Parameter')
 			box.box().label(text = 'Children will ordered alphabetically.')
+		
+		elif obj.sm64_obj_type in inlineGeoLayoutObjects:
+			self.draw_inline_obj(box, obj)
 		
 		elif obj.sm64_obj_type == 'None':
 			box.box().label(text = 'This can be used as an empty transform node in a geolayout hierarchy.')
@@ -1459,8 +1545,28 @@ def sm64_obj_register():
 	
 	bpy.types.Object.switchParam = bpy.props.IntProperty(
 		name = 'Function Parameter', min = -2**(15), max = 2**(15) - 1, default = 0)
+
+	bpy.types.Object.geoASMFunc = bpy.props.StringProperty(
+		name = 'Geo ASM Function', default = '', 
+		description = 'Name of function for C, hex address for binary.')
+
+	bpy.types.Object.geoASMParam = bpy.props.IntProperty(
+		name = 'Geo ASM Parameter', min = -2**(15), max = 2**(15) - 1, default = 0, 
+		description = 'Function parameter.')
 	
+	# bpy.types.Object.drawLayer = bpy.props.EnumProperty(items = sm64EnumDrawLayers, default = "1")
+	# TODO: Implement the custom draw layeeerrrrrr
+	# bpy.types.Object.customDrawLayer = bpy.props.StringProperty(name = 'Custom draw layer define or layer num')
+	bpy.types.Object.useDLReference = bpy.props.BoolProperty(name = 'Use displaylist reference')
+	bpy.types.Object.dlReference = bpy.props.StringProperty(name = 'Displaylist variable name or hex address for binary.')
+
+	bpy.types.Object.geoReference = bpy.props.StringProperty(name = 'Geolayout variable name or hex address for binary')
+
+	bpy.types.Object.customGeoCommand = bpy.props.StringProperty(name = 'Geolayout macro command', default = '')
+	bpy.types.Object.customGeoCommandArgs = bpy.props.StringProperty(name = 'Geolayout macro arguments', default = '')
+
 	bpy.types.Object.enableRoomSwitch = bpy.props.BoolProperty(name = 'Enable Room System')
+
 
 def sm64_obj_unregister():
 	del bpy.types.Object.sm64_model_enum

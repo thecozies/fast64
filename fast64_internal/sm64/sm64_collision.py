@@ -332,7 +332,7 @@ def exportCollisionCommon(obj, transformMatrix, includeSpecials, includeChildren
 	collisionDict = {}
 	#addCollisionTriangles(obj, collisionDict, includeChildren, transformMatrix, areaIndex)
 	tempObj, allObjs = \
-		duplicateHierarchy(obj, None, True, areaIndex)
+		duplicateHierarchy(obj, None, True, areaIndex, True)
 	try:
 		addCollisionTriangles(tempObj, collisionDict, includeChildren, transformMatrix, areaIndex)
 		cleanupDuplicatedObjects(allObjs)

@@ -890,6 +890,10 @@ class SM64_ExportLevel(bpy.types.Operator):
 			raisePluginError(self, e)
 			return {'CANCELLED'} # must return a set
 		try:
+			# TODO: Clear the original matrix, should be temp data
+			store_original_mtx()
+			store_original_meshes()
+
 			applyRotation([obj], math.radians(90), 'X')
 			if context.scene.levelCustomExport:
 				exportPath = bpy.path.abspath(context.scene.levelExportPath)
@@ -923,6 +927,7 @@ class SM64_ExportLevel(bpy.types.Operator):
 			self.report({'INFO'}, 'Success!')
 
 			applyRotation([obj], math.radians(-90), 'X')
+			cleanupTempMeshes()
 			#applyRotation(obj.children, math.radians(0), 'X')
 			return {'FINISHED'} # must return a set
 
@@ -931,6 +936,7 @@ class SM64_ExportLevel(bpy.types.Operator):
 				bpy.ops.object.mode_set(mode = 'OBJECT')
 
 			applyRotation([obj], math.radians(-90), 'X')
+			cleanupTempMeshes()
 			#applyRotation(obj.children, math.radians(0), 'X')
 
 			obj.select_set(True)

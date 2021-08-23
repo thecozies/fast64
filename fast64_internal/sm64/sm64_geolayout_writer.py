@@ -4,6 +4,7 @@ from bpy.utils import register_class, unregister_class
 from os.path import basename
 from io import BytesIO
 
+from .sm64_objects import InlineGeolayoutObjConfig, inlineGeoLayoutObjects
 from .sm64_geolayout_bone import getSwitchOptionBone
 from .sm64_geolayout_constants import *
 from .sm64_geolayout_utility import *
@@ -220,7 +221,7 @@ def convertArmatureToGeolayout(armatureObj, obj, convertTransformMatrix,
 
 # Camera is unused here
 def convertObjectToGeolayout(obj, convertTransformMatrix, 
-	f3dType, isHWv1, camera, name, fModel, areaObj, DLFormat, convertTextureData):
+	f3dType, isHWv1, camera, name, fModel: FModel, areaObj, DLFormat, convertTextureData):
 	
 	if fModel is None:
 		fModel = SM64Model(f3dType, isHWv1, name, DLFormat)
@@ -250,7 +251,7 @@ def convertObjectToGeolayout(obj, convertTransformMatrix,
 
 	# Duplicate objects to apply scale / modifiers / linked data
 	tempObj, allObjs = \
-		duplicateHierarchy(rootObj, 'ignore_render', True, None if areaObj is None else areaObj.areaIndex)
+		duplicateHierarchy(rootObj, 'ignore_render', True, None if areaObj is None else areaObj.areaIndex, False)
 	try:
 		processMesh(fModel, tempObj, convertTransformMatrix,
 			meshGeolayout.nodes[0], geolayoutGraph.startGeolayout,
@@ -289,7 +290,7 @@ def exportGeolayoutObjectC(obj, convertTransformMatrix,
 	return saveGeolayoutC(geoName, dirName, geolayoutGraph, fModel, dirPath, texDir, 
 		savePNG, texSeparate, groupName, headerType, levelName, customExport, DLFormat)
 
-def saveGeolayoutC(geoName, dirName, geolayoutGraph, fModel, exportDir, texDir, savePNG,
+def saveGeolayoutC(geoName, dirName, geolayoutGraph: GeolayoutGraph, fModel: FModel, exportDir, texDir, savePNG,
  	texSeparate, groupName, headerType, levelName, customExport, DLFormat):
 	dirPath, texDir = getExportDir(customExport, exportDir, headerType, 
 		levelName, texDir, dirName)
@@ -776,11 +777,8 @@ def duplicateNode(transformNode, parentNode, index):
 	return optionNode
 
 def partOfGeolayout(obj):
-	useGeoEmpty = obj.data is None and \
-		(obj.sm64_obj_type == 'None' or \
-		obj.sm64_obj_type == 'Level Root' or \
-		obj.sm64_obj_type == 'Area Root' or \
-		obj.sm64_obj_type == 'Switch')
+	useGeoEmpty = obj.data is None and checkSM64EmptyUsesGeoLayout(obj.sm64_obj_type)
+
 	return isinstance(obj.data, bpy.types.Mesh) or useGeoEmpty
 
 def getSwitchChildren(areaRoot):
@@ -825,20 +823,31 @@ def getOptimalNode(translate, rotate, drawLayer, hasDL, zeroTranslation, zeroRot
 		node = TranslateRotateNode(drawLayer, 0, hasDL, translate, rotate)
 	return node
 
+def processInlineGeoNode(inlineGeoConfig: InlineGeolayoutObjConfig, obj, parentTransformNode, translate, rotate):
+	node = None
+	# change draw layer to int for macro conversion
+	int_layer = int(obj.draw_layer_static)
+	if inlineGeoConfig.name == 'Geo Translate/Rotate':
+		print('processInlineGeoNode', inlineGeoConfig.name)
+		node = TranslateRotateNode(int_layer, 0, obj.useDLReference, translate, rotate, obj.dlReference)
+	else:
+		print('processInlineGeoNode', inlineGeoConfig.name)
+		raise PluginError(f'Ooops! Didnt implement inline geo exporting for {inlineGeoConfig.name}')
+
+	return node, parentTransformNode
+
 # This function should be called on a copy of an object
 # The copy will have modifiers / scale applied and will be made single user
-def processMesh(fModel, obj, transformMatrix, parentTransformNode,
-	geolayout, geolayoutGraph, isRoot, convertTextureData):
+def processMesh(fModel: FModel, obj, transformMatrix, parentTransformNode,
+	geolayout, geolayoutGraph: GeolayoutGraph, isRoot, convertTextureData):
 	#finalTransform = copy.deepcopy(transformMatrix)
 
-	useGeoEmpty = obj.data is None and \
-		(obj.sm64_obj_type == 'None' or \
-		obj.sm64_obj_type == 'Level Root' or \
-		obj.sm64_obj_type == 'Area Root' or \
-		obj.sm64_obj_type == 'Switch')
+	useGeoEmpty = obj.data is None and checkSM64EmptyUsesGeoLayout(obj.sm64_obj_type)
 
 	useSwitchNode = obj.data is None and \
 		obj.sm64_obj_type == 'Switch'
+
+	useInlineGeo = obj.data is None and checkIsSM64InlineGeoLayout(obj.sm64_obj_type)
 
 	addRooms = isRoot and obj.data is None and \
 		obj.sm64_obj_type == 'Area Root' and \
@@ -846,7 +855,35 @@ def processMesh(fModel, obj, transformMatrix, parentTransformNode,
 		
 	#if useAreaEmpty and areaIndex is not None and obj.areaIndex != areaIndex:
 	#	return
-		
+
+	inlineGeoConfig: InlineGeolayoutObjConfig = inlineGeoLayoutObjects.get(obj.sm64_obj_type)
+	processed_inline_geo = False
+	if useInlineGeo:
+		print('__________________________________________________________')
+		print('__________________________________________________________')
+		print('__________________________________________________________')
+		print('\n\nUsing inline geo!')
+		print(inlineGeoConfig.name)
+		print('__________________________________________________________')
+		print('__________________________________________________________')
+		if inlineGeoConfig.name == 'Geo ASM':
+			addParentNode(parentTransformNode, FunctionNode(obj.geoASMFunc, obj.geoASMParam))
+			print('Adding function node')
+			processed_inline_geo = True
+		elif inlineGeoConfig.name == 'Geo Branch':
+			# TODO: see if storeReturn should be an option (seems like vanilla always has 1)
+			addParentNode(parentTransformNode, JumpNode(True, None, obj.geoReference))
+			print('Adding Geo Branch node')
+			processed_inline_geo = True
+		elif inlineGeoConfig.name == 'Geo Displaylist':
+			addParentNode(parentTransformNode, DisplayListNode(int(obj.draw_layer_static), obj.dlReference))
+			print('Adding DisplayListNode')
+			processed_inline_geo = True
+		elif inlineGeoConfig.name == 'Custom Geo Command':
+			addParentNode(parentTransformNode, CustomNode(obj.customGeoCommand, obj.customGeoCommandArgs))
+			print('Adding CustomNode')
+			processed_inline_geo = True
+
 	# Its okay to return if ignore_render, because when we duplicated obj hierarchy we stripped all
 	# ignore_renders from geolayout.
 	if not partOfGeolayout(obj) or obj.ignore_render:
@@ -856,8 +893,31 @@ def processMesh(fModel, obj, transformMatrix, parentTransformNode,
 		translate = mathutils.Vector((0,0,0))
 		rotate = mathutils.Quaternion()
 	else:
-		translate = obj.matrix_local.decompose()[0]
-		rotate = obj.matrix_local.decompose()[1]
+		# translate = obj.matrix_local.decompose()[0]
+		# mtx = blenderToSM64RotationLevel.to_4x4()
+		# mtx = mathutils.Matrix([[1,0,0], [0,0,1], [0,-1,0], [0,0,0]]).to_4x4()
+		# rq = mathutils.Quaternion((1, 0, 0), math.radians(90.0)).to_matrix().to_4x4()
+		orig_mtx = mathutils.Matrix(obj['original_mtx'])
+		translate, rotate, _ = orig_mtx.decompose()
+		translate = translate_xyz_to_xzy(translate)
+		rotate = rotation_xyz_quat_to_xzy_quat(rotate)
+		
+		# SOOOOOOOOO the biggest issue right now is that the meshs are baked in
+		# the solve seems to be INSTANCING
+		# so yeah.. god damnit this change is turning out to be huge
+
+
+		# translate = mathutils.Vector((obj['original_mtx'])[0])
+		# rotate = mathutils.Quaternion((obj['original_mtx'])[1])
+		# translate = (obj['original_mtx'] @ mtx)[0]
+		# rotate = (obj['original_mtx'] @ mtx)[1]
+
+		# soooooo apparently all them nodes are converting to zxy.. hmm
+		# but sm64 translates AFTER rotating.. so is this right?
+		# rotate = obj.matrix_local.decompose()[1] #.to_euler()
+		# rotate = mathutils.Euler([rotate.x, rotate.z, rotate.y], 'XYZ')
+		# rotate.rotate(mathutils.Euler([math.radians(-90), math.radians(0), math.radians(0)], 'XYZ'))
+		# rotate = rotate.to_quaternion()
 	rotAxis, rotAngle = rotate.to_axis_angle()
 	zeroRotation = isZeroRotation(rotate)
 	zeroTranslation = isZeroTranslation(translate)
@@ -898,22 +958,30 @@ def processMesh(fModel, obj, transformMatrix, parentTransformNode,
 					optionGeolayout, geolayoutGraph, False, convertTextureData)
 
 	else:
-		if obj.geo_cmd_static == 'Optimal' or useGeoEmpty:
+		if useInlineGeo and not processed_inline_geo:
+			node, parentTransformNode = processInlineGeoNode(inlineGeoConfig, obj, parentTransformNode, translate, rotate)
+			processed_inline_geo = True
+
+		elif obj.geo_cmd_static == 'Optimal' or useGeoEmpty:
 			node = getOptimalNode(translate, rotate, int(obj.draw_layer_static), True,
 				zeroTranslation, zeroRotation)
+			print('optimal', node)
 	
 		elif obj.geo_cmd_static == "DisplayListWithOffset":
+			print('obj.geo_cmd_static == "DisplayListWithOffset"')
 			if not zeroRotation:
 				node = DisplayListWithOffsetNode(int(obj.draw_layer_static), True,
 					mathutils.Vector((0,0,0)))	
 	
 				parentTransformNode = addParentNode(parentTransformNode,
 					TranslateRotateNode(1, 0, False, translate, rotate))
+				print('DisplayListWithOffset if not zeroRotation', node)
 			else:
 				node = DisplayListWithOffsetNode(int(obj.draw_layer_static), True,
 					translate)
+				print('DisplayListWithOffset else (if not zeroRotation)', node)
 	
-		else: #Billboard
+		else: # Billboard
 			if not zeroRotation:
 				node = BillboardNode(int(obj.draw_layer_static), True, 
 					mathutils.Vector((0,0,0)))
@@ -922,6 +990,7 @@ def processMesh(fModel, obj, transformMatrix, parentTransformNode,
 					TranslateRotateNode(1, 0, False, translate, rotate))
 			else:
 				node = BillboardNode(int(obj.draw_layer_static), True, translate)
+			print('Billboard', node)
 
 
 		transformNode = TransformNode(node)
@@ -953,13 +1022,33 @@ def processMesh(fModel, obj, transformMatrix, parentTransformNode,
 
 		if obj.data is None:
 			fMeshes = {}
+		elif obj.get('original_mesh_name'):
+			temp_obj = get_obj_temp_mesh(obj)
+			if temp_obj is None:
+				raise PluginError('God damnit bobby')
+
+			src_meshes = temp_obj.get('src_meshes', [])
+
+			if len(src_meshes):
+				print('if len(src_meshes)')
+				fMeshes = {}
+				node.dlRef = src_meshes[0]
+				processed_inline_geo = True
+			else:
+				triConverterInfo = TriangleConverterInfo(temp_obj, None, fModel.f3d, transformMatrix, getInfoDict(temp_obj))
+				fMeshes = saveStaticModel(triConverterInfo, fModel, temp_obj, transformMatrix, fModel.name, 
+					convertTextureData, False, 'sm64')
+
+				temp_obj['src_meshes'] = [fMesh.draw.name for fMesh in fMeshes.values()]
+				node.dlRef = temp_obj['src_meshes'][0]
 		else:
 			triConverterInfo = TriangleConverterInfo(obj, None, fModel.f3d, transformMatrix, getInfoDict(obj))
 			fMeshes = saveStaticModel(triConverterInfo, fModel, obj, transformMatrix, fModel.name, 
 				convertTextureData, False, 'sm64')
 
 		if fMeshes is None or len(fMeshes) == 0:
-			node.hasDL = False
+			if not processed_inline_geo:
+				node.hasDL = False
 		else:
 			firstNodeProcessed = False
 			for drawLayer, fMesh in fMeshes.items():
@@ -979,7 +1068,9 @@ def processMesh(fModel, obj, transformMatrix, parentTransformNode,
 
 		parentTransformNode.children.append(transformNode)
 		transformNode.parent = parentTransformNode
-
+		print('__________________________________________________________')
+		print('Processing children...')
+		print('__________________________________________________________')
 		alphabeticalChildren = sorted(obj.children, key = lambda childObj: childObj.original_name.lower())
 		for childObj in alphabeticalChildren:
 			processMesh(fModel, childObj, transformMatrix, transformNode, 

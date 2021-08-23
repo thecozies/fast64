@@ -401,6 +401,8 @@ def customExportWarning(layout):
 	layout.box().label(text = 'This will not write any headers/dependencies.')
 
 def raisePluginError(operator, exception):
+	print(exception)
+	print(traceback.format_exc())
 	if bpy.context.scene.fullTraceback:
 		operator.report({'ERROR'}, traceback.format_exc())
 	else:
@@ -523,7 +525,46 @@ def deleteIfFound(filePath, stringValue):
 			fileData.write(stringData)
 		fileData.close()
 
-def duplicateHierarchy(obj, ignoreAttr, includeEmpties, areaIndex):
+def store_original_mtx():
+	for obj in bpy.data.objects:
+		obj['original_mtx'] = obj.matrix_local
+
+def store_original_meshes():
+	meshes = {}
+	for obj in bpy.data.objects:
+		if obj.data is not None and len(obj.modifiers) == 0:
+			if obj.data.name not in meshes:
+				meshes[obj.data.name] = obj
+			obj['original_mesh_name'] = obj.data.name
+
+	for obj in meshes.values():
+		copied = obj.copy()
+		copied.parent = None
+		copied.location = mathutils.Vector([0.0, 0.0, 0.0])
+		copied.scale = mathutils.Vector([1.0, 1.0, 1.0])
+		copied.rotation_quaternion = mathutils.Quaternion([1, 0, 0, 0])
+		copied.data = copied.data.copy()
+		mtx = mathutils.Quaternion((1, 0, 0), math.radians(-90.0)).to_matrix().to_4x4()
+		# mb = copied.matrix_basis
+		# copied.data.transform(mb)
+		copied.data.transform(mtx)
+		copied['temp_export'] = True
+
+def get_temp_meshes():
+	temp = {}
+	for obj in bpy.data.objects:
+		if obj.get('temp_export'):
+			temp[obj['original_mesh_name']] = obj
+	return temp
+
+def get_obj_temp_mesh(obj):
+	for o in bpy.data.objects:
+		if o.get('temp_export') and \
+			o.get('original_mesh_name') == obj.get('original_mesh_name'):
+			return o
+
+
+def duplicateHierarchy(obj, ignoreAttr, includeEmpties, areaIndex, forCollision):
 	# Duplicate objects to apply scale / modifiers / linked data
 	bpy.ops.object.select_all(action = 'DESELECT')
 	selectMeshChildrenOnly(obj, None, includeEmpties, areaIndex)
@@ -533,14 +574,22 @@ def duplicateHierarchy(obj, ignoreAttr, includeEmpties, areaIndex):
 	try:
 		tempObj = bpy.context.view_layer.objects.active
 		allObjs = bpy.context.selected_objects
+
+		# TODO: Instancing: avoid making single user - instead find parent user and instance remainder of meshes
 		bpy.ops.object.make_single_user(obdata = True)
+		# TODO: NOT Applying rotation here causes the world to be rotated 90 degrees :(
+		# bpy.ops.object.transform_apply(location = False, 
+		# 	rotation = forCollision, scale = True, properties =  False)
 		bpy.ops.object.transform_apply(location = False, 
 			rotation = True, scale = True, properties =  False)
+
 		for selectedObj in allObjs:
 			bpy.ops.object.select_all(action = 'DESELECT')
 			selectedObj.select_set(True)
 			bpy.context.view_layer.objects.active = selectedObj
+
 			for modifier in selectedObj.modifiers:
+				# TODO: Instancing: If an object has modifiers different from the original mesh, skip applying
 				attemptModifierApply(modifier)
 		for selectedObj in allObjs:
 			if ignoreAttr is not None and getattr(selectedObj, ignoreAttr):
@@ -560,17 +609,43 @@ def duplicateHierarchy(obj, ignoreAttr, includeEmpties, areaIndex):
 		bpy.context.view_layer.objects.active = obj
 		raise Exception(str(e))
 
+enumSM64InlineGeoLayoutObjects = {
+	'Geo ASM',
+	'Geo Branch',
+	'Geo Translate/Rotate',
+	'Geo Translate Node',
+	'Geo Rotation Node',
+	'Geo Billboard',
+	'Geo Scale',
+	'Geo Displaylist',
+	'Custom Geo Command'
+}
+
+
+def checkIsSM64InlineGeoLayout(sm64_obj_type):
+	return sm64_obj_type in enumSM64InlineGeoLayoutObjects
+
+enumSM64EmptyWithGeolayout = {
+	'None',
+	'Level Root',
+	'Area Root',
+	'Switch'
+}
+
+def checkSM64EmptyUsesGeoLayout(sm64_obj_type):
+	return sm64_obj_type in enumSM64EmptyWithGeolayout or checkIsSM64InlineGeoLayout(sm64_obj_type)
+
+# SM64
 def selectMeshChildrenOnly(obj, ignoreAttr, includeEmpties, areaIndex):
 	checkArea = areaIndex is not None and obj.data is None
 	if checkArea and obj.sm64_obj_type == 'Area Root' and obj.areaIndex != areaIndex:
 		return
 	ignoreObj = ignoreAttr is not None and getattr(obj, ignoreAttr)
 	isMesh = isinstance(obj.data, bpy.types.Mesh)
-	isEmpty = (obj.data is None) and includeEmpties and \
-		(obj.sm64_obj_type == 'Level Root' or \
-		obj.sm64_obj_type == 'Area Root' or \
-		obj.sm64_obj_type == 'None' or \
-		obj.sm64_obj_type == 'Switch')
+	isEmpty = \
+		(obj.data is None) and \
+		includeEmpties and \
+		checkSM64EmptyUsesGeoLayout(obj.sm64_obj_type)
 	if (isMesh or isEmpty) and not ignoreObj:
 		obj.select_set(True)
 		obj.original_name = obj.name
@@ -590,6 +665,17 @@ def cleanupDuplicatedObjects(selected_objects):
 	for mesh in meshData:
 		bpy.data.meshes.remove(mesh)
 
+def cleanupTempMeshes():
+	temp_meshes = []
+	for obj in bpy.data.objects:
+		if obj.get('temp_export'):
+			temp_meshes.append(obj.data)
+			bpy.data.objects.remove(obj)
+
+	for mesh in temp_meshes:
+		bpy.data.meshes.remove(mesh)
+
+# SM64
 def combineObjects(obj, includeChildren, ignoreAttr, areaIndex):
 	obj.original_name = obj.name
 
@@ -756,10 +842,10 @@ def enum_label_split(layout, name, data, prop, enumItems):
 	split.label(text = name)
 	split.enum_item_name(data, prop, enumItems)
 
-def prop_split(layout, data, field, name):
+def prop_split(layout, data, field, name, **prop_kwargs):
 	split = layout.split(factor = 0.5)
 	split.label(text = name)
-	split.prop(data, field, text = '')
+	split.prop(data, field, text = '', **prop_kwargs)
 
 def toAlnum(name):
 	if name is None or name == '':
@@ -992,3 +1078,24 @@ def read16bitRGBA(data):
 	a = bitMask(data,  0, 1) / ((2**1) - 1)
 
 	return [r,g,b,a]
+
+def join_c_args(args: 'list[str]'):
+	return ', '.join(args)
+
+def translate_xyz_to_xzy(translate: mathutils.Vector):
+	xzy_translate = translate.xzy
+	xzy_translate[2] = -xzy_translate[2]
+	return xzy_translate
+
+def rotation_xyz_quat_to_xzy_quat(rotation: mathutils.Quaternion):
+    euler_rot = rotation.to_matrix().inverted().to_euler('ZXY')
+    new_rot = mathutils.Euler([-euler_rot.x, -euler_rot.z, euler_rot.y], 'ZXY')
+	# TODO: Warn users if X, Y, or X aren't close to perfect integers
+	# And encourage using ZXY object rotations 
+    return new_rot.to_quaternion()
+
+# def rotation_xyz_quat_to_xzy_quat(rotation: mathutils.Quaternion):
+# 	euler_rot = rotation.normalized().to_euler()
+# 	new_rot = mathutils.Euler([euler_rot.x, euler_rot.z, -euler_rot.y], 'ZXY')
+# 	print(new_rot)
+# 	return new_rot.to_quaternion().normalized()
