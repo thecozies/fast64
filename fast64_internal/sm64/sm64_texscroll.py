@@ -18,6 +18,21 @@ def readSegmentInfo(baseDir):
 
 	compressionFmt = bpy.context.scene.compressionFormat
 	segDict = {}
+
+	# loosely find segments
+	for matchResult in re.finditer(
+        '(?<!#define )BEGIN\_SEG\((((?!\,!\#).)*)\,\s*(((?!\))[x\d])*)\)',
+        ldData):
+		segName = matchResult.group(1).strip()
+		if 'name' in segName or '#' in segName: # ignore other segment macros
+			continue
+
+		segDict[segName] = \
+			('_' + matchResult.group(1) + "_" + compressionFmt + "SegmentRomStart",
+			int(matchResult.group(3).strip()[2:4], 16), 
+			None) # 3rd entry unused
+
+	# find standard object segments
 	for matchResult in re.finditer('(?<!#define )STANDARD\_OBJECTS\(' +\
 		'(((?!\,).)*)\,\s*(((?!\,).)*)\,\s*(((?!\)).)*)\)', ldData):
 		segDict[matchResult.group(1).strip()] = \
