@@ -12,6 +12,8 @@ class VertexWeightError(PluginError):
 
 geoNodeRotateOrder = 'ZXY'
 sm64BoneUp = Vector([1,0,0])
+puppycamAnglePtrIndex = 0
+puppycamAnglePtrNullIndex = -1
 
 transform_mtx_blender_to_n64 = lambda: Matrix((
 	(1,  0, 0, 0),

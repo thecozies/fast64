@@ -64,8 +64,13 @@ def createHeaderFile(levelName, filepath):
 	result = '#ifndef ' + levelName.upper() + '_HEADER_H\n' +\
 		'#define ' + levelName.upper() + '_HEADER_H\n\n' +\
 		'#include "types.h"\n' +\
-		'#include "game/moving_texture.h"\n\n' +\
-		'extern const LevelScript level_' + levelName + '_entry[];\n\n' +\
+		'#include "game/moving_texture.h"\n'
+	# global isPuppycam2
+	if isPuppycam2:
+		result += '#include "src/game/puppycam2.h"\n\n'
+		print("included puppycam in header")
+
+	result += 'extern const LevelScript level_' + levelName + '_entry[];\n\n' +\
 		'#endif\n'
 
 	headerFile = open(filepath, 'w', newline = '\n')
@@ -541,41 +546,6 @@ def parseLevelScript(filepath, levelName):
 	parseLevelPersistentBlocks(scriptData, levelscript)
 	return levelscript
 
-def overwritePuppycamData(filePath, levelToReplace, newPuppycamTriggers):
-	# Splits the file into what's before, inside, and after the array
-	arrayEntiresRegex = '(.+struct\s+newcam_hardpos\s+newcam_fixedcam\[\]\s+=\s+{)(.+)(\};)'
-	# Splits the individual entries in the array apart
-	structEntry = '(.+?\{.+?\}.+?\n)'
-
-	if os.path.exists(filePath):
-		dataFile = open(filePath, 'r')
-		data = dataFile.read()
-		dataFile.close()
-
-		matchResult = re.search(arrayEntiresRegex, data, re.DOTALL)
-
-		if matchResult:
-			data = ''
-			entriesString = matchResult.group(2)
-
-			# Iterate through each existing entry, getting rid of any that are in the level we're importing to.
-			entriesList = re.findall(structEntry, entriesString, re.DOTALL)
-			for entry in entriesList:
-				if re.search('(\{\s?' + levelToReplace + '\s?,)', re.sub('(/\*.+?\*/)|(//.+?\n)', '', entry), re.DOTALL) is None:
-					data += entry
-
-			# Add the new entries from this export, then put the file back together again.
-			data += '\n\n' + newPuppycamTriggers
-			data = matchResult.group(1) + data + '\n' + matchResult.group(3)
-		else:
-			raise PluginError("Could not find 'struct newcam_hardpos newcam_fixedcam[]'.")
-
-		dataFile = open(filePath, 'w', newline='\n')
-		dataFile.write(data)
-		dataFile.close()
-	else:
-		raise PluginError(filePath + " does not exist.")
-
 class SM64OptionalFileStatus:
 	def __init__(self):
 		self.cameraC = False
@@ -600,12 +570,21 @@ def exportLevelC(obj, transformMatrix, f3dType, isHWv1, levelName, exportDir,
 		os.mkdir(levelDir)
 	areaDict = {}
 
+	# If puppycam2.c isn't detected, it just silently doesn't export the pc2 volumes. Might add an error? Dunno.
+	# doesn't work. why?
+	gameDir = os.path.join(exportDir, 'src/game')
+	global isPuppycam2
+	isPuppycam2 = os.path.exists(os.path.join(gameDir, 'puppycam2.c'))
+	if not isPuppycam2:
+		print("Warning: this is not a puppycam2 repository. Skipping puppycam2 volume exporting")
+	else:
+		print("Puppycam file detected. puppycam2 volumes will be exported")
+
 	geoString = ''
 	levelDataString = ''
 	headerString = ''
 	areaString = ''
 	cameraVolumeString = "struct CameraTrigger " + levelCameraVolumeName + "[] = {\n"
-	puppycamVolumeString = ''
 
 	fModel = SM64Model(f3dType, isHWv1, levelName + '_dl', DLFormat)
 	childAreas = [child for child in obj.children if child.data is None and child.sm64_obj_type == 'Area Root']
@@ -685,10 +664,11 @@ def exportLevelC(obj, transformMatrix, f3dType, isHWv1, levelName, exportDir,
 		persistentBlockString = prevLevelScript.get_persistent_block(PersistentBlocks.areaCommands, nTabs=2, areaIndex=str(area.index))
 		areaString += area.to_c_script(
 			child.enableRoomSwitch,
-			persistentBlockString=persistentBlockString
+			persistentBlockString=persistentBlockString,
+			includePuppycam=isPuppycam2
 		)
+
 		cameraVolumeString += area.to_c_camera_volumes()
-		puppycamVolumeString += area.to_c_puppycam_volumes()
 
 		# Write macros
 		macroFile = open(os.path.join(areaDir, 'macro.inc.c'), 'w', newline = '\n')
@@ -705,6 +685,15 @@ def exportLevelC(obj, transformMatrix, f3dType, isHWv1, levelName, exportDir,
 		splineFile.close()
 		levelDataString += '#include "levels/' + levelName + '/' + areaName + '/spline.inc.c"\n'
 		headerString += splinesC.header
+
+		# Write puppycam2 angles
+		if isPuppycam2:
+			anglesFile = open(os.path.join(areaDir, 'puppyangles.inc.c'), 'w', newline = '\n')
+			anglesC = area.to_c_puppycam_angles()
+			anglesFile.write(anglesC.source)
+			anglesFile.close()
+			levelDataString += '#include "levels/' + levelName + '/' + areaName + '/puppyangles.inc.c"\n'
+			headerString += anglesC.header
 
 	cameraVolumeString += '\tNULL_TRIGGER\n};'
 
@@ -827,11 +816,6 @@ def exportLevelC(obj, transformMatrix, f3dType, isHWv1, levelName, exportDir,
 				'struct CameraTrigger *sCameraTriggers', False)
 			fileStatus.cameraC = True
 
-		# Export puppycam triggers
-		# If this isn't an ultrapuppycam repo, don't try and export ultrapuppycam triggers
-		puppycamAnglesPath = os.path.join(exportDir, 'enhancements/puppycam_angles.inc.c')
-		if os.path.exists(puppycamAnglesPath) and puppycamVolumeString != "":
-			overwritePuppycamData(puppycamAnglesPath, levelIDNames[levelName], puppycamVolumeString)
 
 		levelHeadersPath = os.path.join(exportDir, 'levels/level_headers.h.in')
 		levelDefinesPath = os.path.join(exportDir, 'levels/level_defines.h')
@@ -885,6 +869,9 @@ def exportLevelC(obj, transformMatrix, f3dType, isHWv1, levelName, exportDir,
 		writeIfNotFound(geoPath, '\n#include "levels/' + levelName + '/geo.inc.c"\n', '')
 		writeIfNotFound(levelDataPath, '\n#include "levels/' + levelName + '/leveldata.inc.c"\n', '')
 		writeIfNotFound(headerPath, '\n#include "levels/' + levelName + '/header.inc.h"\n', '#endif')
+
+		if isPuppycam2:
+			writeIfNotFound(headerPath, '#include "src/game/puppycam2.h"\n', '#include "levels/' + levelName + '/header.inc.h"')
 
 		if fModel.texturesSavedLastExport == 0:
 			textureIncludePath = os.path.join(levelDir, 'texture_include.inc.c')

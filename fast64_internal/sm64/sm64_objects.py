@@ -204,21 +204,32 @@ enumPuppycamMode = [
 	('NC_MODE_NOROTATE', 'No Rotation', 'No Rotation'),
 ]
 
+enumPuppycamInputMode = [
+	('0', 'None', 'None'),
+	('PUPPYCAM_BEHAVIOUR_INPUT_NORMAL', 'Normal', 'Normal'),
+	('PUPPYCAM_BEHAVIOUR_INPUT_8DIR', '8 Directions', '8 Directions'),
+	('PUPPYCAM_BEHAVIOUR_INPUT_4DIR', '4 Directions', '4 Directions'),
+	('PUPPYCAM_BEHAVIOUR_INPUT_2D', '2D', '2D'),
+]
+
+enumPuppycamVolumeShape = [
+	('PUPPYVOLUME_SHAPE_BOX', 'Cuboid', 'Cuboid'),
+	('PUPPYVOLUME_SHAPE_CYLINDER', 'Cylinder', 'Cylinder'),
+]
+
+# todo: fill in the descriptions (make them tooltips?)
 enumPuppycamFlags = [
-	('NC_FLAG_XTURN', 'X Turn', 'the camera\'s yaw can be moved by the player.'),
-	('NC_FLAG_YTURN', 'Y Turn', 'the camera\'s pitch can be moved by the player.'),
-	('NC_FLAG_ZOOM', 'Zoom', 'the camera\'s distance can be set by the player.'),
-	('NC_FLAG_8D', '8 Directions', 'the camera will snap to an 8 directional axis'),
-	('NC_FLAG_4D', '4 Directions', 'the camera will snap to a 4 directional axis'),
-	('NC_FLAG_2D', '2D', 'the camera will stick to 2D.'),
-	('NC_FLAG_FOCUSX', 'Use X Focus', 'the camera will point towards its focus on the X axis.'),
-	('NC_FLAG_FOCUSY', 'Use Y Focus', 'the camera will point towards its focus on the Y axis.'),
-	('NC_FLAG_FOCUSZ', 'Use Z Focus', 'the camera will point towards its focus on the Z axis.'),
-	('NC_FLAG_POSX', 'Move on X axis', 'the camera will move along the X axis.'),
-	('NC_FLAG_POSY', 'Move on Y axis', 'the camera will move along the Y axis.'),
-	('NC_FLAG_POSZ', 'Move on Z axis', 'the camera will move along the Z axis.'),
-	('NC_FLAG_COLLISION', 'Collision', 'the camera will collide and correct itself with terrain.'),
-	('NC_FLAG_SLIDECORRECT', 'Slide Correction', 'the camera will attempt to centre itself behind Mario whenever he\'s sliding.'),
+	('PC2_FLAG_X_MOVEMENT', 'X Movement', 'The camera can move along the X axis.'),
+	('PC2_FLAG_Y_MOVEMENT', 'Y Movement', 'The camera can move along the Y axis.'),
+	('PC2_FLAG_Z_MOVEMENT', 'Z Movement', 'The camera can move along the Z axis.'),
+	('PC2_FLAG_YAW_ROTATION', 'Yaw Rotation', ''),
+	('PC2_FLAG_PITCH_ROTATION', 'Pitch Rotation', ''),
+	('PC2_FLAG_ZOOM_CHANGE', 'Zoom Change', ''),
+	('PC2_FLAG_SLIDE_CORRECTION', 'Slide Correction', ''),
+	('PC2_FLAG_TURN_HELPER', 'Turn Helper', ''),
+	('PC2_FLAG_HEIGHT_HELPER', 'Height Helper', ''),
+	('PC2_FLAG_PANSHIFT', 'Pan Shift', ''),
+	('PC2_FLAG_COLLISION', 'Camera Collision', ''),
 ]
 
 class SM64_Object:
@@ -360,7 +371,7 @@ class SM64_Area:
 	def macros_name(self):
 		return self.name + '_macro_objs'
 
-	def to_c_script(self, includeRooms, persistentBlockString: str = ''):
+	def to_c_script(self, includeRooms, persistentBlockString: str = '', includePuppycam: bool = False):
 		data = ''
 		data += '\tAREA(' + str(self.index) + ', ' + self.geolayout.name + '),\n'
 		for warpNode in self.warpNodes:
@@ -379,6 +390,11 @@ class SM64_Area:
 			data += '\t\tSHOW_DIALOG(0x00, ' + self.startDialog + '),\n'
 		data += '\t\tTERRAIN_TYPE(' + self.terrain_type + '),\n'
 		data += f'{persistentBlockString}\n'
+
+		if includePuppycam:
+			for puppycamVolume in self.puppycamVolumes:
+				data += '\t\tPUPPYVOLUME(' + puppycamVolume.volume_to_c() + '),\n'
+
 		data += '\tEND_AREA(),\n\n'
 		return data
 
@@ -401,7 +417,22 @@ class SM64_Area:
 	def to_c_puppycam_volumes(self):
 		data = ''
 		for puppycamVolume in self.puppycamVolumes:
-			data +=  '\t' + puppycamVolume.to_c() + '\n'
+			data +=  '\t' + puppycamVolume.volume_to_c() + '\n'
+		return data
+
+	def to_c_puppycam_angles(self):
+		nullAngleIndex = False
+		data = CData()
+		data.header += 'extern const struct sPuppyAngles ' + self.name + '_angles[];\n'
+		data.source += '#include "src/game/puppycam2.h"\n\nconst struct sPuppyAngles ' + self.name + '_angles[] = {\n'
+		for puppycamVolume in self.puppycamVolumes:
+			if puppycamVolume.isNonTrivialAngle():
+				data.source += puppycamVolume.angle_to_c() + '\n'
+			elif not nullAngleIndex:
+				# create the null angle only for the first occurence, other null angles just share it
+				nullAngleIndex = True
+				data.source += puppycamVolume.angle_to_c() + '\n'
+		data.source += '};\n'
 		return data
 
 	def hasCutsceneSpline(self):
@@ -473,33 +504,102 @@ class CameraVolume:
 		return data
 
 class PuppycamVolume:
-
-	def __init__(self, area, level, permaswap, functionName, position, scale, emptyScale, camPos, camFocus, mode):
-		self.level = level
-		self.area = area
+	def __init__(self, permaswap, functionName, position, rotation, scale, emptyScale, camPos, camFocus, room, addflags, removeflags, camYaw, camPitch, camZoom, volumeShape, angleptr):
+		
 		self.functionName = functionName
-		self.permaswap = permaswap
-		self.mode = mode
+		self.angleptr = angleptr
 
-		#camPos and camFocus are in blender scale, z-up
-		# xyz, beginning and end
-		self.begin = (position[0] - scale[0], position[1] - scale[2], position[2] - scale[1])
-		self.end = (position[0] + scale[0], position[1] + scale[2], position[2] + scale[1])
+		self.room = room
+		# fast64 uses room 0 to denote no room affiliation, pc2 uses -1 as an ignore flag for room check
+		if self.room == 0:
+			self.room = -1
+
+		self.volumeShape = volumeShape
+
+		self.permaswap = permaswap
+		
+		self.addflags = addflags
+		self.removeflags = removeflags
+
+		self.position = position
+		self.scale = mathutils.Vector((scale[0], scale[2], scale[1])) * emptyScale
+		self.rotation = rotation
+
 		camScaleValue = bpy.context.scene.blenderToSM64Scale
 
-		# xyz for pos and focus obtained from chosen empties or from selected camera (32767 is ignore flag)
-		if camPos != (32767, 32767, 32767):
-			self.camPos = (camPos[0] * camScaleValue, camPos[2] * camScaleValue, camPos[1] * camScaleValue * -1)
-		else:
-			self.camPos = camPos
+		# xyz for pos and focus obtained from chosen empties or from selected camera (PUPPY_NULL is ignore flag)
+		self.camYaw = camYaw
+		self.camPitch = 'PUPPY_NULL'
+		self.camZoom = 'PUPPY_NULL'
 
-		if camFocus != (32767, 32767, 32767):
-			self.camFocus = (camFocus[0] * camScaleValue, camFocus[2] * camScaleValue, camFocus[1] * camScaleValue * -1)
-		else:
-			self.camFocus = camFocus
+		self.camPos = ['PUPPY_NULL', 'PUPPY_NULL', 'PUPPY_NULL']
+		self.camFocus = ['PUPPY_NULL', 'PUPPY_NULL', 'PUPPY_NULL']
+
+		if camPos[0] != 'PUPPY_NULL':
+			self.camPos[0] = int(round(camPos[0] * camScaleValue))
+		if camPos[1] != 'PUPPY_NULL':
+			self.camPos[2] = int(round(camPos[1] * camScaleValue * -1))
+		if camPos[2] != 'PUPPY_NULL':
+			self.camPos[1] = int(round(camPos[2] * camScaleValue))
+		
+		if camFocus[0] != 'PUPPY_NULL':
+			self.camFocus[0] = int(round(camFocus[0] * camScaleValue))
+		if camFocus[1] != 'PUPPY_NULL':
+			self.camFocus[2] = int(round(camFocus[1] * camScaleValue * -1))
+		if camFocus[2] != 'PUPPY_NULL':
+			self.camFocus[1] = int(round(camFocus[2] * camScaleValue))	
+
+	def isNonTrivialAngle(self):
+		# returns true if the angle generated by this volume has at least one field that isn't "PUPPY_NULL"
+		s = 'PUPPY_NULL'
+		return not ((str(self.camPos[0]) == s) and (str(self.camPos[1]) == s) and (str(self.camPos[2]) == s) and (str(self.camFocus[0]) == s) and (str(self.camFocus[1]) == s) and (str(self.camFocus[2]) == s) and (str(self.camYaw) == s) and (str(self.camPitch) == s) and (str(self.camZoom) == s))
+
 
 	def to_binary(self):
 		raise PluginError("Binary exporting not implemented for puppycam volumes.")
+	
+	# all the args for the levelscript command
+	def volume_to_c(self):
+		data = str(int(round(self.position[0]))) + ', ' + \
+			str(int(round(self.position[1]))) + ', ' + \
+			str(int(round(self.position[2]))) + ', ' + \
+			str(int(round(self.scale[0]))) + ', ' + \
+			str(int(round(self.scale[1]))) + ', ' + \
+			str(int(round(self.scale[2]))) + ', ' + \
+			str(convertRadiansToS16(self.rotation[1])) + ', ' + \
+			('&' if self.functionName != '' else '0') + str(self.functionName) + ', ' + \
+			str(self.angleptr) + ', ' + \
+			str(self.addflags) + ', ' + \
+			str(self.removeflags) + ', ' + \
+			('PUPPYCAM_BEHAVIOUR_PERMANENT' if self.permaswap else 'PUPPYCAM_BEHAVIOUR_TEMPORARY') + ', ' + \
+			str(int(self.room)) + ', ' + \
+			str(self.volumeShape)
+		return data
+
+	def angle_to_c(self):
+		# pos xyz, focus xyz, yaw, pitch, zoom
+		if self.camYaw == "PUPPY_NULL":
+			outputYaw = "PUPPY_NULL"
+		else:
+			outputYaw = str(convertRadiansToS16(math.tau - self.camYaw + (math.pi/2)))
+
+		if self.camPitch == "PUPPY_NULL":
+			outputPitch = "PUPPY_NULL"
+		else:
+			outputPitch = str(convertRadiansToS16(math.tau - self.camPitch + (math.pi/2)))
+
+		if self.camZoom == "PUPPY_NULL":
+			outputZoom = "PUPPY_NULL"
+		else:
+			outputZoom = str(int(self.camZoom))
+
+		data = '\t{\n' + \
+			'\t\t{' + str(self.camPos[0]) + ', ' + str(self.camPos[1]) + ', ' + str(self.camPos[2]) + '},\n' + \
+			'\t\t{' + str(self.camFocus[0]) + ', ' + str(self.camFocus[1]) + ', ' + str(self.camFocus[2]) + '},\n' + \
+			'\t\t' + outputYaw + ',\n' + \
+			'\t\t' + outputPitch + ',\n' + \
+			'\t\t' + outputZoom + ',\n\t},'
+		return data
 
 	def to_c(self):
 		data = '{' + \
@@ -587,10 +687,16 @@ def handleRefreshDiffMacros(preset):
 		pass
 	return preset
 
+
+
 def start_process_sm64_objects(obj, area, transformMatrix, specialsOnly):
 	#spaceRotation = mathutils.Quaternion((1, 0, 0), math.radians(90.0)).to_matrix().to_4x4()
 
 	# We want translations to be relative to area obj, but rotation/scale to be world space
+	global puppycamAnglePtrIndex
+	global puppycamAnglePtrNullIndex
+	puppycamAnglePtrIndex = 0
+	puppycamAnglePtrNullIndex = -1
 	translation, rotation, scale = obj.matrix_world.decompose()
 	process_sm64_objects(obj, area,
 		mathutils.Matrix.Translation(translation), transformMatrix, specialsOnly)
@@ -651,62 +757,214 @@ def process_sm64_objects(obj, area, rootMatrix, transformMatrix, specialsOnly):
 					translation, rotation.to_euler(), scale, obj.empty_display_size))
 
 			elif obj.sm64_obj_type == 'Puppycam Volume':
-				checkIdentityRotation(obj, rotation, False)
-
+				checkIdentityRotation(obj, rotation, True)
+				
 				triggerIndex = area.index
-				puppycamProp = obj.puppycamProp
-				if(puppycamProp.puppycamUseFlags):
-					puppycamModeString = '0'
-					if puppycamProp.NC_FLAG_XTURN:
-						puppycamModeString += " | NC_FLAG_XTURN"
-					if puppycamProp.NC_FLAG_YTURN:
-						puppycamModeString += " | NC_FLAG_YTURN"
-					if puppycamProp.NC_FLAG_ZOOM:
-						puppycamModeString += " | NC_FLAG_ZOOM"
-					if puppycamProp.NC_FLAG_8D:
-						puppycamModeString += " | NC_FLAG_8D"
-					if puppycamProp.NC_FLAG_4D:
-						puppycamModeString += " | NC_FLAG_4D"
-					if puppycamProp.NC_FLAG_2D:
-						puppycamModeString += " | NC_FLAG_2D"
-					if puppycamProp.NC_FLAG_FOCUSX:
-						puppycamModeString += " | NC_FLAG_FOCUSX"
-					if puppycamProp.NC_FLAG_FOCUSY:
-						puppycamModeString += " | NC_FLAG_FOCUSY"
-					if puppycamProp.NC_FLAG_FOCUSZ:
-						puppycamModeString += " | NC_FLAG_FOCUSZ"
-					if puppycamProp.NC_FLAG_POSX:
-						puppycamModeString += " | NC_FLAG_POSX"
-					if puppycamProp.NC_FLAG_POSY:
-						puppycamModeString += " | NC_FLAG_POSY"
-					if puppycamProp.NC_FLAG_POSZ:
-						puppycamModeString += " | NC_FLAG_POSZ"
-					if puppycamProp.NC_FLAG_COLLISION:
-						puppycamModeString += " | NC_FLAG_COLLISION"
-					if puppycamProp.NC_FLAG_SLIDECORRECT:
-						puppycamModeString += " | NC_FLAG_SLIDECORRECT"
-				else:
-					puppycamModeString = (puppycamProp.puppycamMode if puppycamProp.puppycamMode != 'Custom' else puppycamProp.puppycamType)
+				puppycamProp = obj.fast64.sm64.puppycam
 
+				posRelative = [obj.location[0], obj.location[1], obj.location[2]]
+				focusRelative = [obj.location[0], obj.location[1], obj.location[2]]
 
+				print(obj.name)
+				print(translation)
+				print(translation[0])
+				print(translation[1])
+				print(translation[2])
+
+				camScaleValue = bpy.context.scene.blenderToSM64Scale
+
+				# get camera pos and focus
 				if (not puppycamProp.puppycamUseEmptiesForPos) and puppycamProp.puppycamCamera is not None:
-					puppycamCamPosCoords = puppycamProp.puppycamCamera.location
+					puppycamCamPosCoords = [puppycamProp.puppycamCamera.location[0], puppycamProp.puppycamCamera.location[1], puppycamProp.puppycamCamera.location[2]]
+					print('\npos:')
+					print('before:')
+					print(puppycamCamPosCoords[0])
+					print(puppycamCamPosCoords[1])
+					print(puppycamCamPosCoords[2])
+					print('location:')
+					print(obj.location)
+					print('translation:')
+					print((translation/camScaleValue))
+					puppycamCamPosCoords[0] = puppycamCamPosCoords[0] - obj.location[0] + (translation[0]/camScaleValue)
+					puppycamCamPosCoords[1] = puppycamCamPosCoords[1] - obj.location[1] - (translation[2]/camScaleValue)
+					puppycamCamPosCoords[2] = puppycamCamPosCoords[2] - obj.location[2] + (translation[1]/camScaleValue)
+					print('after:')
+					print(puppycamCamPosCoords[0])
+					print(puppycamCamPosCoords[1])
+					print(puppycamCamPosCoords[2])
 				elif puppycamProp.puppycamUseEmptiesForPos and puppycamProp.puppycamCamPos != "":
 					puppycamPosObject = bpy.context.scene.objects[puppycamProp.puppycamCamPos]
-					puppycamCamPosCoords = puppycamPosObject.location
+					puppycamCamPosCoords = [puppycamPosObject.location[0], puppycamPosObject.location[1], puppycamPosObject.location[2]]
+					puppycamCamPosCoords[0] = puppycamCamPosCoords[0] - obj.location[0] + (translation[0]/camScaleValue)
+					puppycamCamPosCoords[1] = puppycamCamPosCoords[1] - obj.location[1] - (translation[2]/camScaleValue)
+					puppycamCamPosCoords[2] = puppycamCamPosCoords[2] - obj.location[2] + (translation[1]/camScaleValue)
 				else:
-					puppycamCamPosCoords = (32767, 32767, 32767)
-
+					puppycamCamPosCoords = ['PUPPY_NULL', 'PUPPY_NULL', 'PUPPY_NULL']
+				
 				if (not puppycamProp.puppycamUseEmptiesForPos) and puppycamProp.puppycamCamera is not None:
-					puppycamCamFocusCoords = (puppycamProp.puppycamCamera.matrix_local @ mathutils.Vector((0, 0, -1)))[:]
+					# focusTransform = puppycamProp.puppycamCamera.convert_space(None, puppycamProp.puppycamCamera.matrix_local, 'LOCAL', 'WORLD')
+					camtuple = (puppycamProp.puppycamCamera.matrix_local @ mathutils.Vector((0, 0, -1)))[:]
+					# camtuple = (focusTransform @ mathutils.Vector((0, 0, -1)))[:]
+					
+
+					puppycamCamFocusCoords = [camtuple[0], camtuple[1], camtuple[2]]
+					print('\nfocus:')
+					print('before:')
+					print(puppycamCamFocusCoords[0])
+					print(puppycamCamFocusCoords[1])
+					print(puppycamCamFocusCoords[2])
+					puppycamCamFocusCoords[0] = puppycamCamFocusCoords[0] - obj.location[0] + (translation[0]/camScaleValue)
+					puppycamCamFocusCoords[1] = puppycamCamFocusCoords[1] - obj.location[1] - (translation[2]/camScaleValue)
+					puppycamCamFocusCoords[2] = puppycamCamFocusCoords[2] - obj.location[2] + (translation[1]/camScaleValue)
+					print('after:')
+					print(puppycamCamFocusCoords[0])
+					print(puppycamCamFocusCoords[1])
+					print(puppycamCamFocusCoords[2])
 				elif puppycamProp.puppycamUseEmptiesForPos and puppycamProp.puppycamCamFocus != "":
 					puppycamFocObject = bpy.context.scene.objects[puppycamProp.puppycamCamFocus]
-					puppycamCamFocusCoords = puppycamFocObject.location
+					puppycamCamFocusCoords = [puppycamFocObject.location[0], puppycamFocObject.location[1], puppycamFocObject.location[2]]
+					puppycamCamFocusCoords[0] = puppycamCamFocusCoords[0] - obj.location[0] + (translation[0]/camScaleValue)
+					puppycamCamFocusCoords[1] = puppycamCamFocusCoords[1] - obj.location[1] - (translation[2]/camScaleValue)
+					puppycamCamFocusCoords[2] = puppycamCamFocusCoords[2] - obj.location[2] + (translation[1]/camScaleValue)
 				else:
-					puppycamCamFocusCoords = (32767, 32767, 32767)
+					puppycamCamFocusCoords = ['PUPPY_NULL', 'PUPPY_NULL', 'PUPPY_NULL']
 
-				area.puppycamVolumes.append(PuppycamVolume(triggerIndex, levelIDNames[bpy.data.scenes["Scene"].levelOption],
-				puppycamProp.puppycamVolumePermaswap, puppycamProp.puppycamVolumeFunction, translation, scale, obj.empty_display_size, puppycamCamPosCoords, puppycamCamFocusCoords, puppycamModeString))
+				if puppycamCamPosCoords[0] != 'PUPPY_NULL' and puppycamCamFocusCoords[0] != 'PUPPY_NULL':
+					# this is the actual angle from pos to focus in blender.
+					camYaw = (math.atan2(puppycamCamPosCoords[1] - puppycamCamFocusCoords[1], puppycamCamPosCoords[0] - puppycamCamFocusCoords[0])) + math.pi
+				else:
+					camYaw = 'PUPPY_NULL'
+
+				
+				
+				camPitch = 'PUPPY_NULL'
+				camZoom = 'PUPPY_NULL'
+
+
+				# kinda gross, I know
+				puppycamAddFlags = []
+				puppycamRemoveFlags = []
+
+				if not puppycamProp.pc2_CamPosMoveX:
+					puppycamAddFlags.append('PUPPYCAM_BEHAVIOUR_X_MOVEMENT')
+					puppycamCamPosCoords[0] = 'PUPPY_NULL' # unlocks the x axis
+				else:
+					puppycamRemoveFlags.append('PUPPYCAM_BEHAVIOUR_X_MOVEMENT')
+
+				if not puppycamProp.pc2_CamPosMoveY:
+					puppycamAddFlags.append('PUPPYCAM_BEHAVIOUR_Y_MOVEMENT')
+					puppycamCamPosCoords[1] = 'PUPPY_NULL' # unlocks the y axis
+				else:
+					puppycamRemoveFlags.append('PUPPYCAM_BEHAVIOUR_Y_MOVEMENT')
+
+				if not puppycamProp.pc2_CamPosMoveZ:
+					puppycamAddFlags.append('PUPPYCAM_BEHAVIOUR_Z_MOVEMENT')
+					puppycamCamPosCoords[2] = 'PUPPY_NULL' # unlocks the z axis
+				else:
+					puppycamRemoveFlags.append('PUPPYCAM_BEHAVIOUR_Z_MOVEMENT')
+				
+				if not puppycamProp.pc2_CamFocMoveX:
+					puppycamCamFocusCoords[0] = 'PUPPY_NULL' # unlocks the x axis
+				
+				if not puppycamProp.pc2_CamFocMoveY:
+					puppycamCamFocusCoords[1] = 'PUPPY_NULL' # unlocks the y axis
+
+				if not puppycamProp.pc2_CamFocMoveZ:
+					puppycamCamFocusCoords[2] = 'PUPPY_NULL' # unlocks the z axis
+
+				if puppycamProp.PC2_FLAG_YAW_ROTATION:
+					puppycamAddFlags.append('PUPPYCAM_BEHAVIOUR_YAW_ROTATION')
+					camYaw = 'PUPPY_NULL'
+				else:
+					puppycamRemoveFlags.append('PUPPYCAM_BEHAVIOUR_YAW_ROTATION')
+
+				if puppycamProp.PC2_FLAG_PITCH_ROTATION:
+					puppycamAddFlags.append('PUPPYCAM_BEHAVIOUR_PITCH_ROTATION')
+					camPitch = 'PUPPY_NULL'
+				else:
+					puppycamRemoveFlags.append('PUPPYCAM_BEHAVIOUR_PITCH_ROTATION')
+				if puppycamProp.PC2_FLAG_ZOOM_CHANGE:
+					puppycamAddFlags.append('PUPPYCAM_BEHAVIOUR_ZOOM_CHANGE')
+
+					if puppycamProp.pc2_UseUserZoom:
+						camZoom = str(int(puppycamProp.pc2_UserZoomValue))
+				else:
+					puppycamRemoveFlags.append('PUPPYCAM_BEHAVIOUR_ZOOM_CHANGE')
+
+				if puppycamProp.PC2_FLAG_SLIDE_CORRECTION:
+					puppycamAddFlags.append('PUPPYCAM_BEHAVIOUR_SLIDE_CORRECTION')
+				else:
+					puppycamRemoveFlags.append('PUPPYCAM_BEHAVIOUR_SLIDE_CORRECTION')
+				if puppycamProp.PC2_FLAG_TURN_HELPER:
+					puppycamAddFlags.append('PUPPYCAM_BEHAVIOUR_TURN_HELPER')
+				else:
+					puppycamRemoveFlags.append('PUPPYCAM_BEHAVIOUR_TURN_HELPER')
+				if puppycamProp.PC2_FLAG_HEIGHT_HELPER:
+					puppycamAddFlags.append('PUPPYCAM_BEHAVIOUR_HEIGHT_HELPER')
+				else:
+					puppycamRemoveFlags.append('PUPPYCAM_BEHAVIOUR_HEIGHT_HELPER')
+				if puppycamProp.PC2_FLAG_PANSHIFT:
+					puppycamAddFlags.append('PUPPYCAM_BEHAVIOUR_PANSHIFT')
+				else:
+					puppycamRemoveFlags.append('PUPPYCAM_BEHAVIOUR_PANSHIFT')
+				if puppycamProp.PC2_FLAG_COLLISION:
+					puppycamAddFlags.append('PUPPYCAM_BEHAVIOUR_COLLISION')
+				else:
+					puppycamRemoveFlags.append('PUPPYCAM_BEHAVIOUR_COLLISION')
+
+				# flags for camera input modes
+				puppycamAddFlags.append(puppycamProp.puppycamInputMode)
+				for inputMode in enumPuppycamInputMode:
+					if inputMode[0] != puppycamProp.puppycamInputMode:
+						puppycamRemoveFlags.append(inputMode[0])
+
+				if puppycamProp.puppycamUseCustomFlags:
+					if puppycamProp.puppycamCustomAddFlags != '':
+						puppycamAddFlags.append(puppycamProp.puppycamCustomAddFlags)
+					if puppycamProp.puppycamCustomRemoveFlags != '':
+						puppycamRemoveFlags.append(puppycamProp.puppycamCustomRemoveFlags)
+					
+
+				puppycamAddFlagsString = ' | '.join(puppycamAddFlags)
+				puppycamRemoveFlagsString = ' | '.join(puppycamRemoveFlags)
+
+				if puppycamAddFlagsString == '':
+					puppycamAddFlagsString = '0'
+
+				if puppycamRemoveFlagsString == '':
+					puppycamRemoveFlagsString = '0'
+				
+				# figure out what the angle pointer is
+				# if no angle pointer is needed, then it's just 0
+				# otherwise
+				# you can't have no angle pointer, so any that would work out to no angle just get pointed a special all-null angle
+				puppycamAnglePtr = '0'
+				
+				# fill in the index for which angle this is. only increment that index if this volume uses an angle pointer
+				# an angle pointer isn't used if all the values would be "PUPPY_NULL"
+				s = 'PUPPY_NULL'
+
+				# todo: zoom and pitch checks?
+				global puppycamAnglePtrIndex
+				global puppycamAnglePtrNullIndex
+				if not ((puppycamCamPosCoords[0] == s) and (puppycamCamPosCoords[1] == s) and (puppycamCamPosCoords[2] == s) and (puppycamCamFocusCoords[0] == s) and (puppycamCamFocusCoords[1] == s) and (puppycamCamFocusCoords[2] == s) and (camYaw == s)):
+					puppycamAnglePtr = '&' + area.name + '_angles[' + str(puppycamAnglePtrIndex) + ']'
+					puppycamAnglePtrIndex += 1
+				elif puppycamAnglePtrNullIndex == -1:
+					puppycamAnglePtr = '&' + area.name + '_angles[' + str(puppycamAnglePtrIndex) + ']'
+					puppycamAnglePtrNullIndex = puppycamAnglePtrIndex
+					puppycamAnglePtrIndex += 1
+				else:
+					puppycamAnglePtr = '&' + area.name + '_angles[' + str(puppycamAnglePtrNullIndex) + ']'
+					
+				
+				volumeShape = puppycamProp.puppycamVolumeShape
+
+				# this flag supercedes room affiliation
+				puppycamRoom = obj.room_num if not puppycamProp.puppycamVolumeIgnoreRooms else 0
+
+				area.puppycamVolumes.append(PuppycamVolume(puppycamProp.puppycamVolumePermaswap, puppycamProp.puppycamVolumeFunction, translation, rotation.to_euler(), scale, obj.empty_display_size, puppycamCamPosCoords, puppycamCamFocusCoords, puppycamRoom, puppycamAddFlagsString, puppycamRemoveFlagsString, camYaw, camPitch, camZoom, volumeShape, puppycamAnglePtr))
+				
 
 
 	elif not specialsOnly and assertCurveValid(obj):
@@ -1065,36 +1323,94 @@ class SM64ObjectPanel(bpy.types.Panel):
 			box.box().label(text = "Only vertical axis rotation allowed.")
 
 		elif obj.sm64_obj_type == 'Puppycam Volume':
-			puppycamProp = obj.puppycamProp
-			prop_split(column, puppycamProp, 'puppycamVolumeFunction', 'Puppycam Function')
-			column.prop(puppycamProp, 'puppycamVolumePermaswap')
-			column.prop(puppycamProp, 'puppycamUseFlags')
-
+			puppycamProp = obj.fast64.sm64.puppycam
+			
+			prop_split(column, puppycamProp, 'puppycamVolumeShape', 'Volume Shape')
+			
 			column.prop(puppycamProp, 'puppycamUseEmptiesForPos')
 
 			if puppycamProp.puppycamUseEmptiesForPos:
-				column.label(text = "Fixed Camera Position (Optional)")
-				column.prop_search(puppycamProp, "puppycamCamPos", bpy.data, "objects", text = '')
+				rowCamPos = column.row(align=True)
+				splitCamPos = rowCamPos.split(align=True)
 
-				column.label(text = "Fixed Camera Focus (Optional)")
-				column.prop_search(puppycamProp, "puppycamCamFocus", bpy.data, "objects", text = '')
+				splitCamPos.label(text = "Cam Position")
+				splitCamPos.prop_search(puppycamProp, "puppycamCamPos", bpy.data, "objects", text = '', icon = 'PINNED')
+
+				rowCamFoc = column.row(align=True)
+				splitCamFoc = rowCamFoc.split(align=True)
+			
+				splitCamFoc.label(text = "Cam Focus")
+				splitCamFoc.prop_search(puppycamProp, "puppycamCamFocus", bpy.data, "objects", text = '', icon = 'PINNED')
 			else:
-				column.label(text = "Fixed Camera Position (Optional)")
+				# column.label(text = "Fixed Camera Position (Optional)")
 				column.prop(puppycamProp, "puppycamCamera")
 				if puppycamProp.puppycamCamera is not None:
 					column.box().label(text = "FOV not exported, only for preview camera.")
 					prop_split(column, puppycamProp, 'puppycamFOV', 'Camera FOV')
 					column.operator("mesh.puppycam_setup_camera", text = 'Setup Camera', icon = 'VIEW_CAMERA')
 
-			if puppycamProp.puppycamUseFlags:
-				for i, flagSet in enumerate(enumPuppycamFlags):
-					column.prop(puppycamProp, flagSet[0])
-			else:
-				prop_split(column, puppycamProp, 'puppycamMode', 'Camera Mode')
-				if puppycamProp.puppycamMode == 'Custom':
-					prop_split(column, puppycamProp, 'puppycamType', '')
+			
 
-			column.box().label(text = "No rotation allowed.")
+			column.label(text = "Fixed Axes (Z-up)")
+
+			rowPos = column.row(align=True)
+			splitPos = rowPos.split(align=True)
+
+			splitPos.label(text = "Pos:")
+			splitPos.prop(puppycamProp, "pc2_CamPosMoveX", toggle=True, text="X", icon='LOCKED' if puppycamProp.pc2_CamPosMoveX else 'UNLOCKED')
+			splitPos.prop(puppycamProp, "pc2_CamPosMoveY", toggle=True, text="Y", icon='LOCKED' if puppycamProp.pc2_CamPosMoveY else 'UNLOCKED')
+			splitPos.prop(puppycamProp, "pc2_CamPosMoveZ", toggle=True, text="Z", icon='LOCKED' if puppycamProp.pc2_CamPosMoveZ else 'UNLOCKED')
+
+			rowFoc = column.row(align=True)
+			splitFoc = rowFoc.split(align=True)
+
+			splitFoc.label(text = "Foc:")
+			splitFoc.prop(puppycamProp, "pc2_CamFocMoveX", toggle=True, text="X", icon='LOCKED' if puppycamProp.pc2_CamFocMoveX else 'UNLOCKED')
+			splitFoc.prop(puppycamProp, "pc2_CamFocMoveY", toggle=True, text="Y", icon='LOCKED' if puppycamProp.pc2_CamFocMoveY else 'UNLOCKED')
+			splitFoc.prop(puppycamProp, "pc2_CamFocMoveZ", toggle=True, text="Z", icon='LOCKED' if puppycamProp.pc2_CamFocMoveZ else 'UNLOCKED')
+
+
+			column.label(text = "Fixed Camera Rotation")
+
+			rowYaw = column.row(align=True)
+			splitYaw = rowYaw.split(align=True)
+
+			splitYaw.prop(puppycamProp, "PC2_FLAG_YAW_ROTATION", toggle=True, invert_checkbox=True, text="Yaw", icon='LOCKED' if not puppycamProp.PC2_FLAG_YAW_ROTATION else 'UNLOCKED')
+			splitYaw.prop(puppycamProp, "PC2_FLAG_PITCH_ROTATION", toggle=True, invert_checkbox=True, text="Pitch", icon='LOCKED' if not puppycamProp.PC2_FLAG_PITCH_ROTATION else 'UNLOCKED')
+
+			
+			column.prop(puppycamProp, "PC2_FLAG_ZOOM_CHANGE")
+
+			rowZoom = column.row(align=True)
+			splitZoom1 = rowZoom.split(align=True)
+			splitZoom2 = rowZoom.split(align=True)
+
+			splitZoom1.enabled = puppycamProp.PC2_FLAG_ZOOM_CHANGE
+			splitZoom2.enabled = puppycamProp.pc2_UseUserZoom
+
+			splitZoom1.prop(puppycamProp, "pc2_UseUserZoom", icon='LOCKED', text="Set Zoom")
+			splitZoom2.prop(puppycamProp, "pc2_UserZoomValue")
+
+			prop_split(column, puppycamProp, 'puppycamInputMode', 'Input Mode')
+
+			column.prop(puppycamProp, "PC2_FLAG_SLIDE_CORRECTION", text='Slide Correction')
+			column.prop(puppycamProp, "PC2_FLAG_COLLISION", text='Camera Collision')
+			column.prop(puppycamProp, "PC2_FLAG_TURN_HELPER", text='Turn Helper')
+			column.prop(puppycamProp, "PC2_FLAG_HEIGHT_HELPER", text='Height Helper')
+			column.prop(puppycamProp, "PC2_FLAG_PANSHIFT", text='Pan Shift')
+			column.prop(puppycamProp, "puppycamVolumeIgnoreRooms", text='Ignore Rooms')
+			
+
+			column.prop(puppycamProp, 'puppycamVolumePermaswap')
+			prop_split(column, puppycamProp, 'puppycamVolumeFunction', 'Puppycam Function')
+
+			column.prop(puppycamProp, "puppycamUseCustomFlags", text='Use custom flags')
+			if puppycamProp.puppycamUseCustomFlags:
+				column.label(text = 'Separate custom flags with " | "')
+				prop_split(column, puppycamProp, 'puppycamCustomAddFlags', 'Add')
+				prop_split(column, puppycamProp, 'puppycamCustomRemoveFlags', 'Remove')
+
+			column.box().label(text = "Only Yaw rotation allowed.")
 
 		elif obj.sm64_obj_type == 'Switch':
 			prop_split(box, obj, 'switchFunc', 'Function')
@@ -1340,9 +1656,9 @@ class PuppycamSetupCamera(bpy.types.Operator):
 
 	def execute(self, context):
 		scene = context.scene
-		cameraObject = bpy.context.active_object.puppycamProp.puppycamCamera.data.name
+		cameraObject = bpy.context.active_object.fast64.sm64.puppycam.puppycamCamera.data.name
+		scene.camera = bpy.context.active_object.fast64.sm64.puppycam.puppycamCamera
 
-		scene.camera = bpy.context.active_object.puppycamProp.puppycamCamera
 		bpy.data.cameras[cameraObject].show_name = True
 		bpy.data.cameras[cameraObject].show_safe_areas = True
 
@@ -1354,7 +1670,7 @@ class PuppycamSetupCamera(bpy.types.Operator):
 		scene.render.resolution_x = 320
 		scene.render.resolution_y = 240
 
-		bpy.data.cameras[cameraObject].angle = math.radians(bpy.context.active_object.puppycamProp.puppycamFOV * (4/3))
+		bpy.data.cameras[cameraObject].angle = math.radians(bpy.context.active_object.fast64.sm64.puppycam.puppycamFOV * (4/3))
 
 		return {'FINISHED'}
 
@@ -1362,23 +1678,29 @@ class PuppycamSetupCamera(bpy.types.Operator):
 def sm64_is_camera_poll(self, object):
     return object.type == 'CAMERA'
 
-class PuppycamProperty(bpy.types.PropertyGroup):
+class PuppycamProperties(bpy.types.PropertyGroup):
 	puppycamVolumeFunction : bpy.props.StringProperty(
-		name = 'Puppycam Function', default = '0')
+		name = 'Puppycam Function',
+		description = 'A custom camera function that will be executed while inside the volume',
+		default = '')
 
 	puppycamVolumePermaswap : bpy.props.BoolProperty(
-		name = 'Permaswap')
+		name = 'Permaswap',
+		description = 'Whether the camera volume settings will continue to take effect after Mario leaves the volume')
 
 	puppycamUseEmptiesForPos : bpy.props.BoolProperty(
-		name = 'Use Empty Objects for positions')
-
+		name = 'Use objects for positions',
+		description = 'Choose one or two objects (empty or otherwise) whose positions will be used for the fixed camera position and focus')
+	
 	puppycamCamera : bpy.props.PointerProperty(
-        type=bpy.types.Object,
+        name='Camera',
+		description='The camera that this volume will use for position and focus. (do NOT parent the camera to the volume)',
+		type=bpy.types.Object,
         poll=sm64_is_camera_poll
     )
 
 	puppycamFOV : bpy.props.FloatProperty(
-		name = 'Field Of View', min = 0, max = 180, default = 45
+		name = 'Field Of View', min = 0, max = 180, default = 45, description = 'The FOV used in game, '
 	)
 
 	puppycamMode : bpy.props.EnumProperty(
@@ -1388,55 +1710,104 @@ class PuppycamProperty(bpy.types.PropertyGroup):
 		name = 'Custom Mode', default = 'NC_MODE_NORMAL')
 
 	puppycamCamPos : bpy.props.StringProperty(
-		name = 'Fixed Camera Position')
+		name = 'Fixed Camera Position',
+		description = 'Position of the fixed camera. Optional')
 
 	puppycamCamFocus : bpy.props.StringProperty(
-		name = 'Fixed Camera Focus')
+		name = 'Fixed Camera Focus',
+		description = "The fixed camera's focus point. Optional")
 
-	puppycamUseFlags : bpy.props.BoolProperty(
-		name = 'Use Flags')
+	puppycamInputMode : bpy.props.EnumProperty(
+		items = enumPuppycamInputMode, default = 'PUPPYCAM_BEHAVIOUR_INPUT_NORMAL')
 
-	NC_FLAG_XTURN : bpy.props.BoolProperty(
-		name = 'X Turn')
+	puppycamVolumeShape : bpy.props.EnumProperty(
+		items = enumPuppycamVolumeShape, default = 'PUPPYVOLUME_SHAPE_BOX')
 
-	NC_FLAG_YTURN : bpy.props.BoolProperty(
-		name = 'Y Turn')
+	# properties
+	pc2_CamPosMoveX : bpy.props.BoolProperty(
+		name = 'Lock X axis',
+		description = 'Lock camera on X axis',
+		default = True)
+	pc2_CamPosMoveY : bpy.props.BoolProperty(
+		name = 'Lock Y axis',
+		description = 'Lock camera on Y axis',
+		default = True)
+	pc2_CamPosMoveZ : bpy.props.BoolProperty(
+		name = 'Lock Z axis',
+		description = 'Lock camera on Z axis',
+		default = True)
 
-	NC_FLAG_ZOOM : bpy.props.BoolProperty(
-		name = 'Y Turn')
+	pc2_CamFocMoveX : bpy.props.BoolProperty(
+		name = 'Lock X axis',
+		description = 'Lock focus on X axis',
+		default = True)
+	pc2_CamFocMoveY : bpy.props.BoolProperty(
+		name = 'Lock Y axis',
+		description = 'Lock focus on Y axis',
+		default = True)
+	pc2_CamFocMoveZ : bpy.props.BoolProperty(
+		name = 'Lock Z axis',
+		description = 'Lock focus on Z axis',
+		default = True)
 
-	NC_FLAG_8D : bpy.props.BoolProperty(
-		name = '8 Directions')
+	pc2_UseUserZoom : bpy.props.BoolProperty(
+		name = 'Fixed Zoom',
+		description = 'Use a fixed zoom distance')
 
-	NC_FLAG_4D : bpy.props.BoolProperty(
-		name = '4 Directions')
+	pc2_UserZoomValue : bpy.props.IntProperty(  
+		name="Zoom Dist",
+		default=1000,
+		subtype='DISTANCE',
+		min = 0,
+		description="Distance the camera will try to keep from the focus point (sm64 units)"  
+	) 
 
-	NC_FLAG_2D : bpy.props.BoolProperty(
-		name = '2D')
 
-	NC_FLAG_FOCUSX : bpy.props.BoolProperty(
-		name = 'Use X Focus')
 
-	NC_FLAG_FOCUSY : bpy.props.BoolProperty(
-		name = 'Use Y Focus')
-
-	NC_FLAG_FOCUSZ : bpy.props.BoolProperty(
-		name = 'Use Z Focus')
-
-	NC_FLAG_POSX : bpy.props.BoolProperty(
+	PC2_FLAG_X_MOVEMENT : bpy.props.BoolProperty(
 		name = 'Move on X axis')
-
-	NC_FLAG_POSY : bpy.props.BoolProperty(
+	PC2_FLAG_Y_MOVEMENT : bpy.props.BoolProperty(
 		name = 'Move on Y axis')
-
-	NC_FLAG_POSZ : bpy.props.BoolProperty(
+	PC2_FLAG_Z_MOVEMENT : bpy.props.BoolProperty(
 		name = 'Move on Z axis')
-
-	NC_FLAG_COLLISION : bpy.props.BoolProperty(
-		name = 'Camera Collision')
-
-	NC_FLAG_SLIDECORRECT : bpy.props.BoolProperty(
+	PC2_FLAG_YAW_ROTATION : bpy.props.BoolProperty(
+		name = 'Rotate yaw')
+	PC2_FLAG_PITCH_ROTATION : bpy.props.BoolProperty(
+		name = 'Rotate pitch')
+	PC2_FLAG_ZOOM_CHANGE : bpy.props.BoolProperty(
+		name = 'Zoom change',
+		description = 'Allow the camera to change its zoom value')
+	PC2_FLAG_SLIDE_CORRECTION : bpy.props.BoolProperty(
 		name = 'Slide Correction')
+	PC2_FLAG_TURN_HELPER : bpy.props.BoolProperty(
+		name = 'Turn Helper')
+	PC2_FLAG_HEIGHT_HELPER : bpy.props.BoolProperty(
+		name = 'Height Helper',
+		description = 'Automatically adjusts camera pitch to follow terrain inclines')
+	PC2_FLAG_PANSHIFT : bpy.props.BoolProperty(
+		name = 'Pan Shift',
+		description = 'Pans the camera in the direction Mario is facing')
+	PC2_FLAG_COLLISION : bpy.props.BoolProperty(
+		name = 'Camera Collision',
+		description = 'Camera uses collision checks to avoid clipping through solid geometry')
+	
+	puppycamUseCustomFlags : bpy.props.BoolProperty(
+		name = 'Use Custom Flags',
+		description = 'Add or remove custom puppycam volume flags')
+
+	puppycamCustomAddFlags : bpy.props.StringProperty(
+		name = 'Add',
+		description = 'Custom flags to add',
+		default = '')
+
+	puppycamCustomRemoveFlags : bpy.props.StringProperty(
+		name = 'Remove',
+		description = 'Custom flags to remove',
+		default = '')
+	
+	puppycamVolumeIgnoreRooms : bpy.props.BoolProperty(
+		name = 'Ignore Rooms',
+		description = "Makes the camera volume active in every room, not just the one it's in")
 
 class SM64_GeoASMProperties(bpy.types.PropertyGroup):
 	name = "Geo ASM Properties"
@@ -1507,6 +1878,7 @@ class SM64_ObjectProperties(bpy.types.PropertyGroup):
 	level: bpy.props.PointerProperty(type=SM64_LevelProperties)
 	area: bpy.props.PointerProperty(type=SM64_AreaProperties)
 	game_object: bpy.props.PointerProperty(type=SM64_GameObjectProperties)
+	puppycam: bpy.props.PointerProperty(type=PuppycamProperties)
 
 	@staticmethod
 	def upgrade_changed_props():
@@ -1529,7 +1901,7 @@ sm64_obj_classes = (
 
 	StarGetCutscenesProperty,
 
-	PuppycamProperty,
+	PuppycamProperties,
 	PuppycamSetupCamera,
 
 	SM64_GeoASMProperties,
@@ -1555,8 +1927,6 @@ def sm64_obj_panel_unregister():
 def sm64_obj_register():
 	for cls in sm64_obj_classes:
 		register_class(cls)
-
-	bpy.types.Object.puppycamProp = bpy.props.PointerProperty(type = PuppycamProperty)
 
 	bpy.types.Object.sm64_model_enum = bpy.props.EnumProperty(
 		name = 'Model', items = enumModelIDs)

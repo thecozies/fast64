@@ -14,8 +14,8 @@ import pstats
 
 # info about add on
 bl_info = {
-	"name": "Fast64",
-	"author": "kurethedead",
+	"name": "Fast64 (w/ pc2 volumes)",
+	"author": "kurethedead, anonymous_moose",
 	"location": "3DView",
 	"description": "Plugin for exporting F3D display lists and other game data related to Super Mario 64.",
 	"category": "Import-Export",
