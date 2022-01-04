@@ -27,6 +27,9 @@ levelDefineArgs = {
 	'camera table' : 10,
 }
 
+def get_level_props_context():
+    return bpy.context.scene.fast64.sm64.level
+
 def createGeoFile(levelName, filepath):
 	result = '#include <ultra64.h>\n' +\
 		'#include "sm64.h"\n' +\
@@ -65,8 +68,8 @@ def createHeaderFile(levelName, filepath):
 		'#define ' + levelName.upper() + '_HEADER_H\n\n' +\
 		'#include "types.h"\n' +\
 		'#include "game/moving_texture.h"\n'
-	# global isPuppycam2
-	if isPuppycam2:
+
+	if get_level_props_context().puppycamEnabled:
 		result += '#include "src/game/puppycam2.h"\n\n'
 		print("included puppycam in header")
 
@@ -570,15 +573,11 @@ def exportLevelC(obj, transformMatrix, f3dType, isHWv1, levelName, exportDir,
 		os.mkdir(levelDir)
 	areaDict = {}
 
-	# If puppycam2.c isn't detected, it just silently doesn't export the pc2 volumes. Might add an error? Dunno.
-	# doesn't work. why?
 	gameDir = os.path.join(exportDir, 'src/game')
-	global isPuppycam2
-	isPuppycam2 = os.path.exists(os.path.join(gameDir, 'puppycam2.c'))
-	if not isPuppycam2:
-		print("Warning: this is not a puppycam2 repository. Skipping puppycam2 volume exporting")
-	else:
-		print("Puppycam file detected. puppycam2 volumes will be exported")
+
+	puppycam2PathExists = os.path.exists(os.path.join(gameDir, 'puppycam2.c'))
+	if not puppycam2PathExists and get_level_props_context().puppycamEnabled:
+		raise PluginError('Could not find src/game/puppycam2.c: only enable "Enable Puppycam2" if you have this file.')
 
 	geoString = ''
 	levelDataString = ''
@@ -664,8 +663,7 @@ def exportLevelC(obj, transformMatrix, f3dType, isHWv1, levelName, exportDir,
 		persistentBlockString = prevLevelScript.get_persistent_block(PersistentBlocks.areaCommands, nTabs=2, areaIndex=str(area.index))
 		areaString += area.to_c_script(
 			child.enableRoomSwitch,
-			persistentBlockString=persistentBlockString,
-			includePuppycam=isPuppycam2
+			persistentBlockString=persistentBlockString
 		)
 
 		cameraVolumeString += area.to_c_camera_volumes()
@@ -687,7 +685,7 @@ def exportLevelC(obj, transformMatrix, f3dType, isHWv1, levelName, exportDir,
 		headerString += splinesC.header
 
 		# Write puppycam2 angles
-		if isPuppycam2:
+		if get_level_props_context().puppycamEnabled:
 			anglesFile = open(os.path.join(areaDir, 'puppyangles.inc.c'), 'w', newline = '\n')
 			anglesC = area.to_c_puppycam_angles()
 			anglesFile.write(anglesC.source)
@@ -793,15 +791,6 @@ def exportLevelC(obj, transformMatrix, f3dType, isHWv1, levelName, exportDir,
 		cameraFile.write(cameraVolumeString)
 		cameraFile.close()
 
-		hasPuppyCamData = puppycamVolumeString != ""
-		puppycamVolumeString = '// Put these structs into the newcam_fixedcam[] array in enhancements/puppycam_angles.inc.c. \n' +\
-			puppycamVolumeString
-
-		if hasPuppyCamData:
-			cameraFile = open(os.path.join(levelDir, 'puppycam_trigger.inc.c'), 'w', newline='\n')
-			cameraFile.write(puppycamVolumeString)
-			cameraFile.close()
-
 	if not customExport:
 		if DLFormat != DLFormat.Static:
 			# Write material headers
@@ -870,7 +859,7 @@ def exportLevelC(obj, transformMatrix, f3dType, isHWv1, levelName, exportDir,
 		writeIfNotFound(levelDataPath, '\n#include "levels/' + levelName + '/leveldata.inc.c"\n', '')
 		writeIfNotFound(headerPath, '\n#include "levels/' + levelName + '/header.inc.h"\n', '#endif')
 
-		if isPuppycam2:
+		if get_level_props_context().puppycamEnabled:
 			writeIfNotFound(headerPath, '#include "src/game/puppycam2.h"\n', '#include "levels/' + levelName + '/header.inc.h"')
 
 		if fModel.texturesSavedLastExport == 0:
@@ -1026,9 +1015,11 @@ class SM64_ExportLevelPanel(SM64_Panel):
 
 	# called every frame
 	def draw(self, context):
+		levelProps = get_level_props_context()
 		col = self.layout.column()
 		col.label(text = 'This is for decomp only.')
 		col.operator(SM64_ExportLevel.bl_idname)
+		col.prop(levelProps, 'puppycamEnabled')
 		col.prop(context.scene, 'levelCustomExport')
 		if context.scene.levelCustomExport:
 			prop_split(col, context.scene, 'levelExportPath', 'Directory')
@@ -1050,8 +1041,12 @@ class SM64_ExportLevelPanel(SM64_Panel):
 			writeBox.label(text = 'src/game/camera.c (camera volume).')
 			writeBox.label(text = 'levels/level_defines.h (camera volume).')
 
+class SM64_LevelExportProperties(bpy.types.PropertyGroup):
+	puppycamEnabled: bpy.props.BoolProperty(name="Enable Puppycam2", description="Enable Puppycam2 volume exporting", default=False)
+
 sm64_level_classes = (
 	SM64_ExportLevel,
+ 	SM64_LevelExportProperties,
 )
 
 sm64_level_panel_classes = (

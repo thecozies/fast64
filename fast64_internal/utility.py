@@ -610,7 +610,7 @@ def copy_object_and_apply(obj: bpy.types.Object, apply_scale = False, apply_modi
 
 	mtx = transform_mtx_blender_to_n64()
 	if apply_scale:
-	 	mtx = mtx @ scale_mtx_from_vector(obj.scale)
+		mtx = mtx @ scale_mtx_from_vector(obj.scale)
 
 	obj_copy.data.transform(mtx)
 	# Flag used for finding these temp objects

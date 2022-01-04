@@ -156,6 +156,7 @@ class SM64_Properties(bpy.types.PropertyGroup):
 	# exportGroup: bpy.props.StringProperty(name='Group', default='group0')
 
 	# Level exports
+	level: bpy.props.PointerProperty(type=SM64_LevelExportProperties)
 	# exportLevelName: bpy.props.StringProperty(name = 'Level', default = 'bob')
 	# exportLevelOption: bpy.props.EnumProperty(items = enumLevelNames, name = 'Level', default = 'bob')
 
