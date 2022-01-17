@@ -608,7 +608,7 @@ def copy_object_and_apply(obj: bpy.types.Object, apply_scale = False, apply_modi
 
 	mtx = transform_mtx_blender_to_n64()
 	if apply_scale:
-	 	mtx = mtx @ scale_mtx_from_vector(obj.scale)
+		mtx = mtx @ scale_mtx_from_vector(obj.scale)
 
 	obj_copy.data.transform(mtx)
 	# Flag used for finding these temp objects
@@ -731,6 +731,10 @@ enumSM64EmptyWithGeolayout = {
 	'Area Root',
 	'Switch'
 }
+
+def check_sm64_empty_references_object(obj: bpy.types.Object):
+	return bpy.context.scene.fast64.sm64.showHackerSM64Options and obj.fast64.sm64.hackerSM64.is_moving_platform_object
+
 def checkSM64EmptyUsesGeoLayout(sm64_obj_type):
 	return sm64_obj_type in enumSM64EmptyWithGeolayout or checkIsSM64InlineGeoLayout(sm64_obj_type)
 
@@ -743,6 +747,7 @@ def selectMeshChildrenOnly(obj, ignoreAttr, includeEmpties, areaIndex):
 	isEmpty = (
 		obj.data is None
 		and includeEmpties
+		and not check_sm64_empty_references_object(obj)
 		and checkSM64EmptyUsesGeoLayout(obj.sm64_obj_type)
 	)
 	if (isMesh or isEmpty) and not ignoreObj:
@@ -1189,6 +1194,9 @@ def read16bitRGBA(data):
 
 def join_c_args(args: 'list[str]'):
 	return ', '.join(args)
+
+def c_func(funcname: str, args: 'list[str]'):
+	return f'{funcname}({join_c_args(args)})'
 
 def translate_blender_to_n64(translate: mathutils.Vector):
 	return transform_mtx_blender_to_n64() @ translate
