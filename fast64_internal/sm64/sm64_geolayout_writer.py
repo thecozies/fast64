@@ -1198,7 +1198,10 @@ def processMesh(
 ):
     # finalTransform = copy.deepcopy(transformMatrix)
 
-    useGeoEmpty = obj.data is None and checkSM64EmptyUsesGeoLayout(obj.sm64_obj_type)
+    useGeoEmpty = (
+        obj.data is None
+        and not check_sm64_empty_references_object(obj)
+        and checkSM64EmptyUsesGeoLayout(obj.sm64_obj_type))
 
     useSwitchNode = obj.data is None and obj.sm64_obj_type == "Switch"
 
