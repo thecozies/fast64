@@ -3714,6 +3714,7 @@ def mat_register():
     bpy.types.Material.f3d_update_flag = bpy.props.BoolProperty()
     bpy.types.Material.f3d_mat = bpy.props.PointerProperty(type=F3DMaterialProperty)
     bpy.types.Material.menu_tab = bpy.props.EnumProperty(items=enumF3DMenu)
+    bpy.types.Material.ignore_render = bpy.props.BoolProperty(name="Ignore Render")
 
     bpy.types.Scene.f3dUserPresetsOnly = bpy.props.BoolProperty(name="User Presets Only")
     bpy.types.Scene.f3d_simple = bpy.props.BoolProperty(name="Display Simple", default=True)
@@ -3742,6 +3743,7 @@ def mat_unregister():
     del bpy.types.Material.is_f3d
     del bpy.types.Material.mat_ver
     del bpy.types.Material.f3d_update_flag
+    del bpy.types.Material.ignore_render
     del bpy.types.Scene.f3d_simple
     del bpy.types.Object.ignore_render
     del bpy.types.Object.ignore_collision

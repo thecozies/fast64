@@ -496,6 +496,10 @@ def saveStaticModel(
     facesByMat = {}
     for face in obj.data.loop_triangles:
         if face.material_index not in facesByMat:
+            mat: bpy.types.Material = obj.material_slots[face.material_index].material
+            if mat.ignore_render:
+                continue
+
             facesByMat[face.material_index] = []
         facesByMat[face.material_index].append(face)
 
