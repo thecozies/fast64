@@ -375,7 +375,7 @@ def saveMeshWithLargeTexturesByFaces(material, faces, fModel, fMesh, obj, drawLa
 
 # Make sure to set original_name before calling this
 # used when duplicating an object
-def saveStaticModel(triConverterInfo, fModel, obj, transformMatrix, ownerName, convertTextureData, revertMatAtEnd, drawLayerField):
+def saveStaticModel(triConverterInfo, fModel, obj: bpy.types.Object, transformMatrix, ownerName, convertTextureData, revertMatAtEnd, drawLayerField):
 	if len(obj.data.polygons) == 0:
 		return None
 
@@ -384,6 +384,10 @@ def saveStaticModel(triConverterInfo, fModel, obj, transformMatrix, ownerName, c
 	facesByMat = {}
 	for face in obj.data.loop_triangles:
 		if face.material_index not in facesByMat:
+			mat: bpy.types.Material = obj.material_slots[face.material_index].material
+			if mat.ignore_render:
+				continue
+
 			facesByMat[face.material_index] = []
 		facesByMat[face.material_index].append(face)
 
@@ -2249,7 +2253,11 @@ def getRenderModeFlagList(settings, fMaterial):
 			settings.rendermode_preset_cycle_1 == 'Use Draw Layer',
 			settings.rendermode_preset_cycle_2 == 'Use Draw Layer']
 
-		if settings.g_mdsft_cycletype == 'G_CYC_2CYCLE':
+		if settings.use_custom_rendermodes:
+			flagList = [
+				settings.rendermode_preset_cycle_1_custom,
+				settings.rendermode_preset_cycle_2_custom]
+		elif settings.g_mdsft_cycletype == 'G_CYC_2CYCLE':
 			flagList = [
 				settings.rendermode_preset_cycle_1,
 				settings.rendermode_preset_cycle_2]

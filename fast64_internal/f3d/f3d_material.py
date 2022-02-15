@@ -735,12 +735,23 @@ class F3DPanel(bpy.types.Panel):
 			renderGroup = inputGroup.column()
 			renderGroup.prop(material.rdp_settings, 'rendermode_advanced_enabled',
 				text = 'Show Advanced Settings')
+
 			if not material.rdp_settings.rendermode_advanced_enabled:
-				prop_split(renderGroup, material.rdp_settings,
-					'rendermode_preset_cycle_1', "Render Mode")
-				if material.rdp_settings.g_mdsft_cycletype == 'G_CYC_2CYCLE':
+				renderGroup.prop(material.rdp_settings, 'use_custom_rendermodes',
+					text = 'Use Custom Render Modes')
+
+				if material.rdp_settings.use_custom_rendermodes:
 					prop_split(renderGroup, material.rdp_settings,
-						'rendermode_preset_cycle_2', "Render Mode Cycle 2")
+						'rendermode_preset_cycle_1_custom', "Render Mode Cycle 1")
+					prop_split(renderGroup, material.rdp_settings,
+						'rendermode_preset_cycle_2_custom', "Render Mode Cycle 2")
+				else:
+					prop_split(renderGroup, material.rdp_settings,
+						'rendermode_preset_cycle_1', "Render Mode")
+
+					if material.rdp_settings.g_mdsft_cycletype == 'G_CYC_2CYCLE':
+						prop_split(renderGroup, material.rdp_settings,
+							'rendermode_preset_cycle_2', "Render Mode Cycle 2")
 			else:
 				prop_split(renderGroup, material.rdp_settings, 'aa_en', 'Antialiasing')
 				prop_split(renderGroup, material.rdp_settings, 'z_cmp', 'Z Testing')
@@ -2228,6 +2239,9 @@ class RDPSettings(bpy.types.PropertyGroup):
 		default = 'G_RM_AA_ZB_OPA_SURF', name = 'Render Mode Cycle 1', update = update_node_values)
 	rendermode_preset_cycle_2 : bpy.props.EnumProperty(items = enumRenderModesCycle2,
 		default = 'G_RM_AA_ZB_OPA_SURF2', name = 'Render Mode Cycle 2', update = update_node_values)
+	use_custom_rendermodes : bpy.props.BoolProperty(default = False, update = update_node_values)
+	rendermode_preset_cycle_1_custom : bpy.props.StringProperty(name='Custom Render Mode Cycle 1', default="G_RM_OPA_SURF",  update=update_node_values)
+	rendermode_preset_cycle_2_custom : bpy.props.StringProperty(name='Custom Render Mode Cycle 2', default="G_RM_OPA_SURF2", update=update_node_values)
 	aa_en : bpy.props.BoolProperty(update = update_node_values)
 	z_cmp : bpy.props.BoolProperty(update = update_node_values)
 	z_upd : bpy.props.BoolProperty(update = update_node_values)
@@ -3222,6 +3236,8 @@ def mat_register():
 	bpy.types.Material.f3d_update_flag = bpy.props.BoolProperty()
 	bpy.types.Material.f3d_mat = bpy.props.PointerProperty(type = F3DMaterialProperty)
 	bpy.types.Material.menu_tab = bpy.props.EnumProperty(items = enumF3DMenu)
+	bpy.types.Material.ignore_render = bpy.props.BoolProperty(
+		name = 'Ignore Render')
 
 	bpy.types.Scene.f3dUserPresetsOnly = bpy.props.BoolProperty(name = "User Presets Only")
 	bpy.types.Scene.f3d_simple = bpy.props.BoolProperty(name = "Display Simple", default = True)
@@ -3242,6 +3258,7 @@ def mat_unregister():
 	del bpy.types.Material.is_f3d
 	del bpy.types.Material.mat_ver
 	del bpy.types.Material.f3d_update_flag
+	del bpy.types.Material.ignore_render
 	del bpy.types.Scene.f3d_simple
 	del bpy.types.Object.ignore_render
 	del bpy.types.Object.ignore_collision

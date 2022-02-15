@@ -805,6 +805,8 @@ class SM64_MaterialPanel(bpy.types.Panel):
 		layout = self.layout
 		material = context.material
 		col = layout.column()
+		col.label(text="Ignore rendering mesh")
+		col.prop(material, 'ignore_render')
 
 		if material.mat_ver > 3:
 			f3dMat = material.f3d_mat
