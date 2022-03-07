@@ -5,7 +5,7 @@ from bpy.types import Operator, Menu
 from bl_operators.presets import AddPresetBase
 from bpy.utils import register_class, unregister_class
 from nodeitems_utils import NodeCategory, NodeItem
-from .f3d_gbi import F3D, enumTexScroll
+from .f3d_gbi import F3D, FMaterial, enumTexScroll
 from .f3d_enums import *
 from .f3d_material_nodes import *
 from .f3d_material_settings import *
@@ -1750,7 +1750,17 @@ def update_tex_values_manual(self, context):
 	update_tex_values_index(self, context, material.tex1, 'Texture 1',
 		'Get UV.001', isTexGen, uvBasisScale1, material.tex_scale, 1)
 
-def getMaterialScrollDimensions(material):
+def shift_val(val, shift):
+	if shift >= 0:
+		return val * (1 << shift)
+	return val / (1 << abs(shift))
+
+def get_tex_shifted_size(tex):
+	s = shift_val(tex.tex.size[0], tex.S.shift)
+	t = shift_val(tex.tex.size[1], tex.T.shift)
+	return [s, t]
+
+def getMaterialScrollDimensions(material: FMaterial):
 	useDict = all_combiner_uses(material)
 
 	if useDict['Texture 0'] and material.tex0.tex is not None and \
@@ -1758,15 +1768,15 @@ def getMaterialScrollDimensions(material):
 		material.tex0.tex.size[0] > 0 and material.tex0.tex.size[1] > 0 and\
 		material.tex1.tex.size[0] > 0 and material.tex1.tex.size[1] > 0:
 		if material.uv_basis == 'TEXEL0':
-			return material.tex0.tex.size
+			return get_tex_shifted_size(material.tex0)
 		else:
-			return material.tex1.tex.size
+			return get_tex_shifted_size(material.tex1)
 	elif useDict['Texture 1'] and material.tex1.tex is not None and\
 		material.tex1.tex.size[0] > 0 and material.tex1.tex.size[1] > 0:
-		return material.tex1.tex.size
+		return get_tex_shifted_size(material.tex1)
 	elif useDict['Texture 0'] and material.tex0.tex is not None and\
 		material.tex0.tex.size[0] > 0 and material.tex0.tex.size[1] > 0:
-		return material.tex0.tex.size
+		return get_tex_shifted_size(material.tex0)
 	else:
 		return [32, 32]
 

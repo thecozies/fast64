@@ -44,6 +44,7 @@ def readSegmentInfo(baseDir):
 		levelData):
 		segDict[matchResult.group(7).strip()] = \
 			('_' + matchResult.group(7) + '_segment_7SegmentRomStart', 7, None)	
+	segDict['menu'] = ('_menu_segment_7SegmentRomStart', 7, None)
 	return segDict
 
 

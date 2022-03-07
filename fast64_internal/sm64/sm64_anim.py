@@ -280,6 +280,7 @@ def exportAnimationCommon(armatureObj, loopAnim, name):
 	# transformValuesStart = transformIndicesStart + (nodeCount + 1) * 3 * 4 
 	transformValuesStart = transformIndicesStart
 
+	translationFrameProperty: ValueFrameData = None
 	for translationFrameProperty in translationData:
 		frameCount = len(translationFrameProperty.frames)
 		sm64_anim.indices.shortData.append(frameCount)
@@ -288,8 +289,13 @@ def exportAnimationCommon(armatureObj, loopAnim, name):
 			raise PluginError('Animation is too large.')
 		transformValuesOffset += frameCount
 		transformValuesStart += 4
-		for value in translationFrameProperty.frames:
-			sm64_anim.values.shortData.append(int.from_bytes(value.to_bytes(2,'big', signed = True), byteorder = 'big', signed = False))
+		for i, value in enumerate(translationFrameProperty.frames):
+			try:
+				sm64_anim.values.shortData.append(int.from_bytes(value.to_bytes(2,'big', signed = True), byteorder = 'big', signed = False))
+			except Exception as e:
+				print(e)
+				print('translationFrameProperty', translationFrameProperty)
+				raise e
 
 	for boneFrameData in armatureFrameData:
 		for boneFrameDataProperty in boneFrameData:
