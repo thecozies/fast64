@@ -616,6 +616,8 @@ def exportLevelC(obj, transformMatrix, f3dType, isHWv1, levelName, exportDir,
 	echoLevels = ['0x00', '0x00', '0x00']
 	zoomFlags = [False, False, False, False]
 
+	platformObjects: 'list[bpy.types.Object]' = []
+
 	if bpy.context.scene.exportHiddenGeometry:
 		hiddenObjs = unhideAllAndGetHiddenList(bpy.context.scene)
 
@@ -705,6 +707,10 @@ def exportLevelC(obj, transformMatrix, f3dType, isHWv1, levelName, exportDir,
 		splineFile.close()
 		levelDataString += '#include "levels/' + levelName + '/' + areaName + '/spline.inc.c"\n'
 		headerString += splinesC.header
+
+		for sm64_obj in area.objects:
+			if hasattr(sm64_obj, 'obj_ref') and sm64_obj.obj_ref is not None:
+				platformObjects.append(sm64_obj.obj_ref)
 
 	cameraVolumeString += '\tNULL_TRIGGER\n};'
 
@@ -909,7 +915,16 @@ def exportLevelC(obj, transformMatrix, f3dType, isHWv1, levelName, exportDir,
 		if texScrollFileStatus is not None:
 			fileStatus.starSelectC = texScrollFileStatus.starSelectC
 
-	return fileStatus
+	dedupedObjects = []
+	if len(platformObjects) > 0:
+		objNames = set()
+		for platformObj in platformObjects:
+			if platformObj.name in objNames:
+				continue
+			objNames.add(platformObj.name)
+			dedupedObjects.append(platformObj)
+
+	return fileStatus, dedupedObjects
 
 def addGeoC(levelName):
 	header = \
@@ -1003,7 +1018,7 @@ class SM64_ExportLevel(ObjectDataExporter):
 			#	globals(), locals(), "E:/blender.prof")
 			#p = pstats.Stats("E:/blender.prof")
 			#p.sort_stats("cumulative").print_stats(2000)
-			fileStatus = exportLevelC(obj, finalTransform,
+			fileStatus, platformObjects = exportLevelC(obj, finalTransform,
 				context.scene.f3d_type, context.scene.isHWv1, levelName, exportPath, 
 				context.scene.saveTextures or bpy.context.scene.ignoreTextureRestrictions, 
 				context.scene.levelCustomExport, triggerName, DLFormat.Static)
@@ -1016,6 +1031,37 @@ class SM64_ExportLevel(ObjectDataExporter):
 
 			self.report({'INFO'}, 'Success!')
 			self.show_warnings()
+
+			saveTextures = bpy.context.scene.saveTextures or bpy.context.scene.ignoreTextureRestrictions
+			platformObj: bpy.types.Object
+			for platformObj in platformObjects:
+
+				# run separate geolayout/collision export
+				geoName = toAlnum(platformObj.name)
+				geoStructName = '_'.join([geoName, 'geo'])
+				collisionName = '_'.join([geoName, 'collision'])
+				applyRotation([platformObj], math.radians(90), 'X')
+
+				exportGeolayoutObjectC(platformObj, finalTransform,
+					context.scene.f3d_type, context.scene.isHWv1,
+					exportPath,
+					bpy.context.scene.geoTexDir, # i guess use this from geo panel idk
+					saveTextures,
+					saveTextures and bpy.context.scene.geoSeparateTextureDef, # i guess use this from geo panel idk
+					None, 'unused_group',
+					'Level',
+					geoName, geoStructName, levelName, False, DLFormat.Static)
+
+				exportCollisionC(platformObj, finalTransform,
+					exportPath, False,
+					True, 
+					geoName, False, False,
+					'Level', 'unused_group', levelName)
+
+				self.cleanup_temp_object_data()
+				applyRotation([platformObj], math.radians(-90), 'X')
+				self.show_warnings()
+
 			return {'FINISHED'} # must return a set
 
 		except Exception as e:

@@ -229,7 +229,6 @@ class SM64_Object:
 		self.acts = acts
 		self.position = position
 		self.rotation = rotation
-		self.obj_ref = None
 
 	def to_c(self):
 		if self.acts == 0x1F:
@@ -268,7 +267,7 @@ class HackerSM64_MovingPlatform:
 		bparam: str,
 		acts: int
 	):
-		self.obj_ref = obj_ref
+		self.obj_ref: bpy.types.Object = obj_ref
 		geolayout, collision = get_moving_platform_vars(obj_ref)
 		self.geolayout = geolayout
 		self.collision = collision
@@ -398,7 +397,7 @@ class SM64_Area:
 		self.geolayout = geolayout
 		self.collision = collision
 		self.index = index
-		self.objects = []
+		self.objects: 'list[SM64_Object | HackerSM64_MovingPlatform]' = []
 		self.macros = []
 		self.specials = []
 		self.water_boxes = []
