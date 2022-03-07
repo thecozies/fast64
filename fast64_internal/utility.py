@@ -316,7 +316,7 @@ def saveDataToFile(filepath, data):
 	dataFile.close()
 
 def applyBasicTweaks(baseDir):
-	enableExtendedRAM(baseDir)
+	# enableExtendedRAM(baseDir)
 	return
 
 def enableExtendedRAM(baseDir):
