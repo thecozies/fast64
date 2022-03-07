@@ -283,6 +283,57 @@ class SM64_Object:
                 + ")"
             )
 
+def get_moving_platform_vars(obj: bpy.types.Object):
+    name = toAlnum(obj.name)
+    return '_'.join([name, 'geo']), '_'.join([name, 'collision'])
+
+class HackerSM64_MovingPlatform:
+    macro = "MOVING_PLATFORM"
+    with_acts = "_WITH_ACTS"
+
+    def __init__(
+        self,
+        obj_ref: bpy.types.Object,
+        position: mathutils.Vector,
+        rotation: mathutils.Euler,
+        behaviour: str,
+        bparam: str,
+        acts: int
+    ):
+        self.obj_ref: bpy.types.Object = obj_ref
+        geolayout, collision = get_moving_platform_vars(obj_ref)
+        self.geolayout = geolayout
+        self.collision = collision
+        self.behaviour = behaviour
+        self.bparam = bparam
+        self.acts = acts
+        self.position = position
+        self.rotation = rotation
+
+    def get_macro(self):
+        if self.acts == 0x1F:
+            return self.macro + self.with_acts
+        return self.macro
+
+    def to_c(self):
+        args = [
+            self.geolayout,
+            self.collision,
+            str(int(round(self.position[0]))),
+            str(int(round(self.position[1]))),
+            str(int(round(self.position[2]))),
+            *(str(radians_to_s16(r)) for r in self.rotation.to_euler('XYZ')),
+            self.bparam,
+            self.behaviour
+        ]
+
+        if self.acts == 0x1F:
+            args.append(str(self.acts))
+
+        return c_func(
+            self.get_macro(),
+            args
+        )
 
 class SM64_Whirpool:
     def __init__(self, index, condition, strength, position):
@@ -445,7 +496,7 @@ class SM64_Area:
         self.geolayout = geolayout
         self.collision = collision
         self.index = index
-        self.objects = []
+        self.objects: 'list[SM64_Object | HackerSM64_MovingPlatform]' = []
         self.macros = []
         self.specials = []
         self.water_boxes = []
