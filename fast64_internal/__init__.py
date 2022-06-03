@@ -3,3 +3,5 @@ from .f3d import *
 from .sm64 import *
 from .oot import *
 from .panels import *
+from .utility import *
+from .render_settings import *
