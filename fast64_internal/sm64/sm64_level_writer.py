@@ -760,10 +760,7 @@ def exportLevelC(
         )
         if area.mario_start is not None:
             prevLevelScript.marioStart = area.mario_start
-        persistentBlockString = prevLevelScript.get_persistent_block(
-            PersistentBlocks.areaCommands, nTabs=2, areaIndex=str(area.index)
-        )
-        areaString += area.to_c_script(child.enableRoomSwitch, persistentBlockString=persistentBlockString)
+
         cameraVolumeString += area.to_c_camera_volumes()
         puppycamVolumeString += area.to_c_puppycam_volumes()
 
@@ -776,12 +773,19 @@ def exportLevelC(
         headerString += macrosC.header
 
         # Write splines
-        splineFile = open(os.path.join(areaDir, "spline.inc.c"), "w", newline="\n")
-        splinesC = area.to_c_splines()
-        splineFile.write(splinesC.source)
-        splineFile.close()
-        levelDataString += '#include "levels/' + levelName + "/" + areaName + '/spline.inc.c"\n'
-        headerString += splinesC.header
+        splineCommands = []
+        with open(os.path.join(areaDir, "spline.inc.c"), "w", newline="\n") as splineFile:
+            splinesC, traj_array = area.to_c_splines()
+            splineFile.write(splinesC.source)
+            levelDataString += '#include "levels/' + levelName + "/" + areaName + '/spline.inc.c"\n'
+            headerString += splinesC.header
+            splineCommands = [c_func("AREA_SPLINE", [t]) for t in traj_array]
+
+        persistentBlockString = prevLevelScript.get_persistent_block(
+            PersistentBlocks.areaCommands, nTabs=2, areaIndex=str(area.index)
+        )
+
+        areaString += area.to_c_script(child.enableRoomSwitch, persistentBlockString=persistentBlockString, splineCommands=splineCommands)
 
         for sm64_obj in area.objects:
             if hasattr(sm64_obj, 'obj_ref') and sm64_obj.obj_ref is not None:

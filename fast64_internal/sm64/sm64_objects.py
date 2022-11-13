@@ -514,7 +514,7 @@ class SM64_Area:
     def macros_name(self):
         return self.name + "_macro_objs"
 
-    def to_c_script(self, includeRooms, persistentBlockString: str = ""):
+    def to_c_script(self, includeRooms, persistentBlockString: str = "", splineCommands: str = ""):
         data = ""
         data += "\tAREA(" + str(self.index) + ", " + self.geolayout.name + "),\n"
         for warpNode in self.warpNodes:
@@ -532,6 +532,8 @@ class SM64_Area:
         if self.startDialog is not None:
             data += "\t\tSHOW_DIALOG(0x00, " + self.startDialog + "),\n"
         data += "\t\tTERRAIN_TYPE(" + self.terrain_type + "),\n"
+        for splineCommand in splineCommands:
+            data += f"\t\t{splineCommand},\n"
         data += f"{persistentBlockString}\n"
         data += "\tEND_AREA(),\n\n"
         return data
@@ -566,12 +568,18 @@ class SM64_Area:
 
     def to_c_splines(self):
         data = CData()
+        spline: SM64Spline = None
+        traj_array: list[str] = []
+
         for spline in self.splines:
             data.append(spline.to_c())
+            if spline.splineType == 'Trajectory':
+                traj_array.append(spline.name)
+
         if self.hasCutsceneSpline():
             data.source = '#include "src/game/camera.h"\n\n' + data.source
             data.header = '#include "src/game/camera.h"\n\n' + data.header
-        return data
+        return data, traj_array
 
 
 class CollisionWaterBox:
