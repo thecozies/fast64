@@ -918,6 +918,8 @@ class F3DPanel(bpy.types.Panel):
         elif not material.use_nodes or not material.is_f3d:
             layout.label(text="This is not a Fast3D material.")
             return
+        else:
+            layout.operator(DuplicateFast3DMaterial.bl_idname)
 
         f3dMat = material.f3d_mat
         layout.prop(context.scene, "f3d_simple", text="Show Simplified UI")
@@ -1998,6 +2000,34 @@ class CreateFast3DMaterial(bpy.types.Operator):
             preset = getDefaultMaterialPreset("Shaded Solid")
             createF3DMat(obj, preset)
             self.report({"INFO"}, "Created new Fast3D material.")
+        return {"FINISHED"}
+
+class DuplicateFast3DMaterial(bpy.types.Operator):
+    bl_idname = "object.duplicate_f3d_mat"
+    bl_label = "Duplicate Fast3D Material"
+    bl_options = {"REGISTER", "UNDO", "PRESET"}
+
+    def execute(self, context):
+        obj = bpy.context.view_layer.objects.active
+        old_mat = get_material_from_context(context)
+        if obj is None:
+            self.report({"ERROR"}, "No active object selected.")
+        if old_mat is None:
+            self.report({"ERROR"}, "No material selected.")
+        else:
+            preset = getDefaultMaterialPreset("Shaded Solid")
+            mat = createF3DMat(obj, preset)
+            copyPropertyGroup(old_mat.f3d_mat, mat.f3d_mat)
+
+            mat.collision_type = old_mat.collision_type
+            mat.collision_type_simple = old_mat.collision_type_simple
+            mat.collision_custom = old_mat.collision_custom
+            mat.collision_all_options = old_mat.collision_all_options
+            mat.use_collision_param = old_mat.use_collision_param
+            mat.collision_param = old_mat.collision_param
+            update_preset_manual(mat, context)
+
+            self.report({"INFO"}, "Created new Fast3D material from old.")
         return {"FINISHED"}
 
 
@@ -3649,6 +3679,7 @@ mat_classes = (
     AddPresetF3D,
     F3DPanel,
     CreateFast3DMaterial,
+    DuplicateFast3DMaterial,
     TextureFieldProperty,
     SetTileSizeScrollProperty,
     TextureProperty,
