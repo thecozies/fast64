@@ -285,9 +285,9 @@ class SM64_Object:
                 + ")"
             )
 
-def get_moving_platform_vars(obj: bpy.types.Object):
-    name = toAlnum(obj.name)
-    return '_'.join([name, 'geo']), '_'.join([name, 'collision'])
+def get_moving_platform_vars(obj: bpy.types.Object, levelName: str) -> tuple[str, str]:
+    name = toAlnum('_'.join([obj.name, levelName]))
+    return name, '_'.join([name, 'geo']), '_'.join([name, 'collision'])
 
 class HackerSM64_MovingPlatform:
     macro = "MOVING_PLATFORM"
@@ -300,10 +300,12 @@ class HackerSM64_MovingPlatform:
         rotation: mathutils.Euler,
         behaviour: str,
         bparam: str,
-        acts: int
+        acts: int,
+        levelName: str
     ):
         self.obj_ref: bpy.types.Object = obj_ref
-        geolayout, collision = get_moving_platform_vars(obj_ref)
+        name, geolayout, collision = get_moving_platform_vars(obj_ref, levelName)
+        self.name = name
         self.geolayout = geolayout
         self.collision = collision
         self.behaviour = behaviour
@@ -491,7 +493,7 @@ class SM64_Mario_Start:
 
 class SM64_Area:
     def __init__(
-        self, index, music_seq, music_preset, terrain_type, geolayout, collision, warpNodes, name, startDialog
+        self, index, music_seq, music_preset, terrain_type, geolayout, collision, warpNodes, name, startDialog, levelName: str
     ):
         self.cameraVolumes = []
         self.puppycamVolumes = []
@@ -510,6 +512,7 @@ class SM64_Area:
         self.mario_start = None
         self.splines = []
         self.startDialog = startDialog
+        self.levelName = levelName
 
     def macros_name(self):
         return self.name + "_macro_objs"
@@ -726,7 +729,7 @@ class PuppycamVolume:
         return data
 
 
-def exportAreaCommon(areaObj, transformMatrix, geolayout, collision, name):
+def exportAreaCommon(areaObj:bpy.types.Object, transformMatrix, geolayout, collision, name):
     bpy.ops.object.select_all(action="DESELECT")
     areaObj.select_set(True)
 
@@ -753,6 +756,7 @@ def exportAreaCommon(areaObj, transformMatrix, geolayout, collision, name):
         [areaObj.warpNodes[i].to_c() for i in range(len(areaObj.warpNodes))],
         name,
         areaObj.startDialog if areaObj.showStartDialog else None,
+        areaObj.get("tmp__levelName", "level")
     )
 
     start_process_sm64_objects(areaObj, area, transformMatrix, False)
@@ -817,7 +821,6 @@ def start_process_sm64_objects(obj, area, transformMatrix, specialsOnly):
     translation, rotation, scale = obj.matrix_world.decompose()
     process_sm64_objects(obj, area, mathutils.Matrix.Translation(translation), transformMatrix, specialsOnly)
 
-
 def process_moving_platform_object(obj, area: SM64_Area, translation, rotation):
     behaviour = func_map[bpy.context.scene.refreshVer][obj.sm64_behaviour_enum] if \
         obj.sm64_behaviour_enum != 'Custom' else obj.sm64_obj_behaviour
@@ -832,24 +835,8 @@ def process_moving_platform_object(obj, area: SM64_Area, translation, rotation):
         rotation,
         behaviour,
         obj.fast64.sm64.game_object.get_behavior_params(),
-        get_act_string(obj)
-    ))
-
-def process_moving_platform_object(obj, area: SM64_Area, translation, rotation):
-    behaviour = func_map[bpy.context.scene.refreshVer][obj.sm64_behaviour_enum] if \
-        obj.sm64_behaviour_enum != 'Custom' else obj.sm64_obj_behaviour
-
-    obj_ref = obj.fast64.sm64.hackerSM64.moving_platform_geo_ref
-    if obj_ref is None:
-        raise PluginError(f'{obj.name} must reference an object')
-
-    area.objects.append(HackerSM64_MovingPlatform(
-        obj_ref,
-        translation,
-        rotation,
-        behaviour,
-        obj.fast64.sm64.game_object.get_behavior_params(),
-        get_act_string(obj)
+        get_act_string(obj),
+        area.levelName
     ))
 
 def process_sm64_objects(obj, area, rootMatrix, transformMatrix, specialsOnly):
