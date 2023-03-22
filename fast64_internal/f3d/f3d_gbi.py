@@ -1737,6 +1737,7 @@ class FSetTileSizeScrollField:
         self.s = 0
         self.t = 0
         self.interval = 1
+        self.intervalOffset = 0
 
 
 def tile_func(direction: str, speed: int, cmd_num: int):
@@ -1769,7 +1770,7 @@ def get_tex_sts_code(tex: FSetTileSizeScrollField, tex_num: int, cmd_num: int):
         # get interval and variable for tracking interval
         interval, cur_interval = get_sts_interval_vars(tex_num)
         # pass each var and its value to variables
-        variables.extend([(interval, tex.interval), (cur_interval, tex.interval)])
+        variables.extend([(interval, tex.interval), (cur_interval, tex.interval - max(0, min(tex.intervalOffset, tex.interval - 1)))])
 
         # indent again for if statement
         lines = [("\t" + func) for func in lines]
@@ -2937,9 +2938,11 @@ class FMaterial:
         self.scrollData.tile_scroll_tex0.s = tex0.tile_scroll.s
         self.scrollData.tile_scroll_tex0.t = tex0.tile_scroll.t
         self.scrollData.tile_scroll_tex0.interval = tex0.tile_scroll.interval
+        self.scrollData.tile_scroll_tex0.intervalOffset = tex0.tile_scroll.intervalOffset
         self.scrollData.tile_scroll_tex1.s = tex1.tile_scroll.s
         self.scrollData.tile_scroll_tex1.t = tex1.tile_scroll.t
         self.scrollData.tile_scroll_tex1.interval = tex1.tile_scroll.interval
+        self.scrollData.tile_scroll_tex1.intervalOffset = tex1.tile_scroll.intervalOffset
 
     def sets_rendermode(self):
         for command in self.material.commands:

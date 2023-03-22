@@ -948,6 +948,7 @@ def ui_tileScroll(tex, name, layout):
     row.prop(tex.tile_scroll, "s", text="S:")
     row.prop(tex.tile_scroll, "t", text="T:")
     row.prop(tex.tile_scroll, "interval", text="Interval:")
+    row.prop(tex.tile_scroll, "intervalOffset", text="Interval Offset:")
 
 
 def ui_procAnimVecEnum(material, procAnimVec, layout, name, vecType, useDropdown, useTex0, useTex1):
@@ -2122,14 +2123,18 @@ class TextureFieldProperty(bpy.types.PropertyGroup):
     def key(self):
         return (self.clamp, self.mirror, round(self.low * 4), round(self.high * 4), self.mask, self.shift)
 
+def clamp_interval_offset(self, _context):
+    if self.intervalOffset >= self.interval:
+        self.intervalOffset = max(0, self.interval - 1)
 
 class SetTileSizeScrollProperty(bpy.types.PropertyGroup):
     s: bpy.props.IntProperty(min=-4095, max=4095, default=0)
     t: bpy.props.IntProperty(min=-4095, max=4095, default=0)
-    interval: bpy.props.IntProperty(min=1, soft_max=1000, default=1)
+    interval: bpy.props.IntProperty(min=1, soft_max=1000, default=1, update=clamp_interval_offset)
+    intervalOffset: bpy.props.IntProperty(min=0, soft_max=1000, default=0)
 
     def key(self):
-        return (self.s, self.t, self.interval)
+        return (self.s, self.t, self.interval, self.intervalOffset)
 
 
 class TextureProperty(bpy.types.PropertyGroup):
