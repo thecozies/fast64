@@ -23,6 +23,14 @@ from .f3d_gbi import _DPLoadTextureBlock
 
 from ..utility import *
 
+ENABLE_VERBOSE = False
+def verbose_print(*args, **kwargs):
+    if ENABLE_VERBOSE:
+        print(*args, **kwargs)
+
+def debug_print(*args):
+    verbose_print(args[0] +":\n" + '\n'.join([f"    {a}" for a in args[1:]]))
+
 
 class FImageKey:
     def __init__(
@@ -1454,7 +1462,7 @@ def getImageKeys(f3dMat: F3DMaterialProperty, useSharedCIPalette: bool) -> tuple
     return imageKey0, imageKey1
 
 
-def saveOrGetF3DMaterial(material, fModel, obj, drawLayer, convertTextureData):
+def saveOrGetF3DMaterial(material, fModel: FModel, obj, drawLayer, convertTextureData):
     if material.mat_ver > 3:
         f3dMat = material.f3d_mat
     else:
@@ -1567,6 +1575,8 @@ def saveOrGetF3DMaterial(material, fModel, obj, drawLayer, convertTextureData):
     saveOtherModeLDefinition(fMaterial, f3dMat.rdp_settings, defaults, defaultRM, fModel.matWriteMethod)
     saveOtherDefinition(fMaterial, f3dMat, defaults)
 
+    verbose_print(f"\n------------------------------------------------------------------\nfMaterial.material.name: {fMaterial.material.name}")
+
     # Set scale
     s = int(min(round(f3dMat.tex_scale[0] * 0x10000), 0xFFFF))
     t = int(min(round(f3dMat.tex_scale[1] * 0x10000), 0xFFFF))
@@ -1600,15 +1610,30 @@ def saveOrGetF3DMaterial(material, fModel, obj, drawLayer, convertTextureData):
         and f3dMat.tex0.ci_format == f3dMat.tex1.ci_format
     )
 
+    paletteKey = None
+    fPalette: FImage = None
+    sharedPalletName: str = None
     # Without shared palette: (load pal0 -> load tex0) or (load pal1 -> load tex1)
     # with shared palette: load pal -> load tex0 -> load tex1
     if useSharedCIPalette:
-        sharedPalette = FSharedPalette(getSharedPaletteName(f3dMat))
+        sharedPalletName = getSharedPaletteName(f3dMat)
+        sharedPalette = FSharedPalette(sharedPalletName)
+        verbose_print(f'if useSharedCIPalette {sharedPalette.name} {sharedPalette.palette}')
+        fPalette: FImage = None
+        palFormat = f3dMat.tex0.ci_format
+        paletteKey = FPaletteKey(palFormat, [f3dMat.tex0.tex, f3dMat.tex1.tex])
+
+        imageKey0, imageKey1 = getImageKeys(f3dMat, True)
+        _unusedImg, fPalette = fModel.getTextureAndHandleShared(imageKey0, palKey=sharedPalette.name)
+        verbose_print("if useSharedCIPalette")
+        verbose_print(f"    _unusedImg {_unusedImg}")
+        verbose_print(f"    fPalette  {fPalette}")
 
         # dummy lists to be appended in later
         loadGfx = GfxList(None, None, fModel.DLFormat)
         revertGfx = GfxList(None, None, fModel.DLFormat)
     else:
+        verbose_print('if useSharedCIPalette (else)')
         sharedPalette = None
         loadGfx = fMaterial.material
         revertGfx = fMaterial.revert
@@ -1673,16 +1698,17 @@ def saveOrGetF3DMaterial(material, fModel, obj, drawLayer, convertTextureData):
         texFormat = f3dMat.tex0.tex_format
         palFormat = f3dMat.tex0.ci_format
 
-        fPalette, paletteKey = saveOrGetPaletteOnlyDefinition(
-            fMaterial,
-            fModel,
-            [f3dMat.tex0.tex, f3dMat.tex1.tex],
-            sharedPalette.name,
-            texFormat,
-            palFormat,
-            convertTextureData,
-            sharedPalette.palette,
-        )
+        if fPalette is None:
+            fPalette, paletteKey = saveOrGetPaletteOnlyDefinition(
+                fMaterial,
+                fModel,
+                [f3dMat.tex0.tex, f3dMat.tex1.tex],
+                sharedPalette.name,
+                texFormat,
+                palFormat,
+                convertTextureData,
+                sharedPalette.palette,
+            )
         savePaletteLoading(
             fMaterial.material,
             fMaterial.revert,
@@ -1837,7 +1863,6 @@ def getTextureNameTexRef(texProp: TextureProperty, fModelName: str) -> str:
 
     return texName
 
-
 def saveTextureIndex(
     propName: str,
     fModel: FModel,
@@ -1856,7 +1881,7 @@ def saveTextureIndex(
     imageKey: FImageKey,
 ) -> tuple[list[int], int, FImage]:
     tex = texProp.tex
-
+    verbose_print(f"saveTextureIndex: start \ntexProp: {texProp} \nfModel.name: {fModel.name} \noverrideName: {overrideName}")
     if tex is not None and (tex.size[0] == 0 or tex.size[1] == 0):
         raise PluginError(
             "Image " + tex.name + " has either a 0 width or height; image may have been removed from original location."
@@ -1877,6 +1902,7 @@ def saveTextureIndex(
     palFormat = texProp.ci_format if isCITexture else ""
 
     texName = getTextureName(texProp, fModel.name, overrideName)
+    verbose_print(f"new tex name: {texName}")
 
     if tileSettingsOverride is not None:
         tileSettings = tileSettingsOverride[index]
@@ -1951,10 +1977,17 @@ def saveTextureIndex(
                 imageKey,
             )
 
+        if fPalette and fPalette.name:
+            verbose_print(f'    savePaletteLoading HAS NAME: pal name: {fPalette.name}')
+        else:
+            verbose_print(f'    savePaletteLoading NO NAME:')
         if loadPalettes and sharedPalette is None:
+            verbose_print('    loadPalettes and sharedPalette is None')
             savePaletteLoading(
                 loadTexGfx, revertTexGfx, fPalette, palFormat, 0, fPalette.height, fModel.f3d, fModel.matWriteMethod
             )
+        else:
+            verbose_print(f"    loadPalettes: {loadPalettes} |\n    sharedPalette: {sharedPalette.name}")
     else:
         if texProp.use_tex_reference:
             fImage = FImage(texProp.tex_reference, None, None, width, height, None, False)
@@ -1990,6 +2023,7 @@ def saveTextureIndex(
     # 	texFormatOf[texFormat], texBitSizeOf[texFormat])
     # fModel.textures[texName] = fImage
 
+    verbose_print("saveTextureIndex end\n")
     return texDimensions, nextTmem, fImage
 
 
@@ -2229,6 +2263,13 @@ def saveOrGetPaletteOnlyDefinition(
 
     palFormat = texFormatOf[palFmt]
     paletteName = checkDuplicateTextureName(fModel, toAlnum(imageName) + "_pal_" + palFmt.lower())
+    debug_print(
+        "saveOrGetPaletteOnlyDefinition",
+        f"imageName: {imageName}",
+        f"paletteName: {paletteName}",
+        f"convertTextureData: {convertTextureData}",
+        f"palette: [{', '.join([str(i) for i in palette])}]"
+    )
     paletteKey = FPaletteKey(palFmt, images)
     paletteFilename = getNameFromPath(imageName, True) + "." + fModel.getTextureSuffixFromFormat(texFmt) + ".pal"
 
@@ -2257,7 +2298,7 @@ def saveOrGetPaletteOnlyDefinition(
 
 def saveOrGetPaletteAndImageDefinition(
     fMaterial,
-    fModelOrTexRect,
+    fModelOrTexRect: FModel,
     image,
     imageName,
     texFmt,
@@ -2270,9 +2311,21 @@ def saveOrGetPaletteAndImageDefinition(
     palFormat = texFormatOf[palFmt]
     bitSize = texBitSizeOf[texFmt]
     # If image already loaded, return that data.
-    fImage, fPalette = fModelOrTexRect.getTextureAndHandleShared(imageKey)
+    palKey = FPaletteKey(palFmt, sharedPalette.name) if sharedPalette is not None else None
+
+    fImage: FImage = None
+    fPalette: FImage = None
+    fImage, fPalette = fModelOrTexRect.getTextureAndHandleShared(imageKey, palKey=palKey)
+
+    if sharedPalette is not None:
+        debug_print(f"saveOrGetPaletteAndImageDefinition (if sharedPalette is not None)",
+            f"fImage.name: {fImage.name if fImage else 'None'}",
+            f"sharedPalette.name: {sharedPalette.name}",
+            f"sharedPalette.name: {', '.join([str(a) for a in sharedPalette.palette])}"
+        )
+
     if fImage is not None:
-        # print(f"Image already exists")
+        verbose_print("Image already exists")
         return fImage, fPalette, True
 
     # print(f"Size: {str(image.size[0])} x {str(image.size[1])}, Data: {str(len(image.pixels))}")
@@ -2348,6 +2401,7 @@ def saveOrGetPaletteAndImageDefinition(
     paletteName = checkDuplicateTextureName(fModelOrTexRect, toAlnum(imageName) + "_pal_" + palFmt.lower())
 
     if sharedPalette is None:
+        verbose_print('saveOrGetPaletteAndImageDefinition calling "saveOrGetPaletteOnlyDefinition"')
         fPalette, paletteKey = saveOrGetPaletteOnlyDefinition(
             fMaterial, fModelOrTexRect, [image], imageName, texFmt, palFmt, convertTextureData, palette
         )

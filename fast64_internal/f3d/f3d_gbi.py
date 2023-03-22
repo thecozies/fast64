@@ -2315,7 +2315,7 @@ class FModel:
     def onEndDraw(self, fMesh, contextObj):
         return
 
-    def getTextureAndHandleShared(self, imageKey):
+    def getTextureAndHandleShared(self, imageKey, palKey = None):
         # Check if texture is in self
         if imageKey in self.textures:
             fImage = self.textures[imageKey]
@@ -2325,13 +2325,20 @@ class FModel:
                 else:
                     print(f"Can't find {str(fImage.paletteKey)}")
                     fPalette = None
+            elif palKey is not None:
+                if palKey in self.textures:
+                    fPalette = self.textures[palKey]
+                else:
+                    print(f"Can't find {str(palKey)}")
+                    fPalette = None
             else:
-                # print("Palette key is None")
+                print("Palette key is None")
                 fPalette = None
 
             return fImage, fPalette
 
         if self.parentModel is not None:
+            print('if self.parentModel is not None')
             # Check if texture is in parent
             if imageKey in self.parentModel.textures:
                 fImage = self.parentModel.textures[imageKey]
