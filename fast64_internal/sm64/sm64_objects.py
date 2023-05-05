@@ -2,6 +2,7 @@ import math, bpy, mathutils
 from bpy.utils import register_class, unregister_class
 from re import findall
 from .sm64_function_map import func_map
+from typing import Callable
 
 from ..utility import (
     PluginError,
@@ -14,6 +15,7 @@ from ..utility import (
     all_values_equal_x,
     checkIsSM64PreInlineGeoLayout,
     prop_split,
+    c_func,
 )
 
 from .sm64_constants import (
@@ -42,7 +44,14 @@ from .sm64_geolayout_classes import (
     CustomNode,
     BillboardNode,
     ScaleNode,
+    radians_to_s16,
 )
+
+from .sm64_utility import check_obj_is_room
+
+from .sm64_spline import SM64Spline
+
+from ..util.collection_list_base import get_collection_classes
 
 
 enumTerrain = [
@@ -318,6 +327,59 @@ class SM64_Object:
                 + ")"
             )
 
+def get_moving_platform_vars(obj: bpy.types.Object, levelName: str) -> tuple[str, str]:
+    name = toAlnum('_'.join([obj.name, levelName]))
+    return name, '_'.join([name, 'geo']), '_'.join([name, 'collision'])
+
+class HackerSM64_MovingPlatform:
+    macro = "MOVING_PLATFORM"
+    with_acts = "_WITH_ACTS"
+
+    def __init__(
+        self,
+        obj_ref: bpy.types.Object,
+        position: mathutils.Vector,
+        rotation: mathutils.Euler,
+        behaviour: str,
+        bparam: str,
+        acts: int,
+        levelName: str
+    ):
+        self.obj_ref: bpy.types.Object = obj_ref
+        name, geolayout, collision = get_moving_platform_vars(obj_ref, levelName)
+        self.name = name
+        self.geolayout = geolayout
+        self.collision = collision
+        self.behaviour = behaviour
+        self.bparam = bparam
+        self.acts = acts
+        self.position = position
+        self.rotation = rotation
+
+    def get_macro(self):
+        if self.acts == 0x1F:
+            return self.macro + self.with_acts
+        return self.macro
+
+    def to_c(self):
+        args = [
+            self.geolayout,
+            self.collision,
+            str(int(round(self.position[0]))),
+            str(int(round(self.position[1]))),
+            str(int(round(self.position[2]))),
+            *(str(radians_to_s16(r)) for r in self.rotation.to_euler('XYZ')),
+            self.bparam,
+            self.behaviour
+        ]
+
+        if self.acts == 0x1F:
+            args.append(str(self.acts))
+
+        return c_func(
+            self.get_macro(),
+            args
+        )
 
 class SM64_Whirpool:
     def __init__(self, index, condition, strength, position):
@@ -472,7 +534,17 @@ class SM64_Mario_Start:
 
 class SM64_Area:
     def __init__(
-        self, index, music_seq, music_preset, terrain_type, geolayout, collision, warpNodes, name, startDialog
+        self,
+        index,
+        music_seq,
+        music_preset,
+        terrain_type,
+        geolayout,
+        collision,
+        warpNodes,
+        name,
+        startDialog,
+        levelName: str
     ):
         self.cameraVolumes = []
         self.puppycamVolumes = []
@@ -480,7 +552,7 @@ class SM64_Area:
         self.geolayout = geolayout
         self.collision = collision
         self.index = index
-        self.objects = []
+        self.objects: 'list[SM64_Object | HackerSM64_MovingPlatform]' = []
         self.macros = []
         self.specials = []
         self.water_boxes = []
@@ -491,11 +563,12 @@ class SM64_Area:
         self.mario_start = None
         self.splines = []
         self.startDialog = startDialog
+        self.levelName = levelName
 
     def macros_name(self):
         return self.name + "_macro_objs"
 
-    def to_c_script(self, includeRooms, persistentBlockString: str = ""):
+    def to_c_script(self, includeRooms, persistentBlockString: str = "", splineCommands: str = ""):
         data = ""
         data += "\tAREA(" + str(self.index) + ", " + self.geolayout.name + "),\n"
         for warpNode in self.warpNodes:
@@ -513,6 +586,8 @@ class SM64_Area:
         if self.startDialog is not None:
             data += "\t\tSHOW_DIALOG(0x00, " + self.startDialog + "),\n"
         data += "\t\tTERRAIN_TYPE(" + self.terrain_type + "),\n"
+        for splineCommand in splineCommands:
+            data += f"\t\t{splineCommand},\n"
         data += f"{persistentBlockString}\n"
         data += "\tEND_AREA(),\n\n"
         return data
@@ -547,12 +622,18 @@ class SM64_Area:
 
     def to_c_splines(self):
         data = CData()
+        spline: SM64Spline = None
+        traj_array: list[str] = []
+
         for spline in self.splines:
             data.append(spline.to_c())
+            if spline.splineType == 'Trajectory':
+                traj_array.append(spline.name)
+
         if self.hasCutsceneSpline():
             data.source = '#include "src/game/camera.h"\n\n' + data.source
             data.header = '#include "src/game/camera.h"\n\n' + data.header
-        return data
+        return data, traj_array
 
 
 class CollisionWaterBox:
@@ -699,7 +780,7 @@ class PuppycamVolume:
         return data
 
 
-def exportAreaCommon(areaObj, transformMatrix, geolayout, collision, name):
+def exportAreaCommon(areaObj: bpy.types.Object, transformMatrix, geolayout, collision, name):
     bpy.ops.object.select_all(action="DESELECT")
     areaObj.select_set(True)
 
@@ -726,6 +807,7 @@ def exportAreaCommon(areaObj, transformMatrix, geolayout, collision, name):
         [areaObj.warpNodes[i].to_c() for i in range(len(areaObj.warpNodes))],
         name,
         areaObj.startDialog if areaObj.showStartDialog else None,
+        areaObj.get("tmp__levelName", "level")
     )
 
     start_process_sm64_objects(areaObj, area, transformMatrix, False)
@@ -790,6 +872,23 @@ def start_process_sm64_objects(obj, area, transformMatrix, specialsOnly):
     translation, rotation, scale = obj.matrix_world.decompose()
     process_sm64_objects(obj, area, mathutils.Matrix.Translation(translation), transformMatrix, specialsOnly)
 
+def process_moving_platform_object(obj, area: SM64_Area, translation, rotation):
+    behaviour = func_map[bpy.context.scene.refreshVer][obj.sm64_behaviour_enum] if \
+        obj.sm64_behaviour_enum != 'Custom' else obj.sm64_obj_behaviour
+
+    obj_ref = obj.fast64.sm64.hackerSM64.moving_platform_geo_ref
+    if obj_ref is None:
+        raise PluginError(f'{obj.name} must reference an object')
+
+    area.objects.append(HackerSM64_MovingPlatform(
+        obj_ref,
+        translation,
+        rotation,
+        behaviour,
+        obj.fast64.sm64.game_object.get_behavior_params(),
+        get_act_string(obj),
+        area.levelName
+    ))
 
 def process_sm64_objects(obj, area, rootMatrix, transformMatrix, specialsOnly):
     translation, originalRotation, scale = (transformMatrix @ rootMatrix.inverted() @ obj.matrix_world).decompose()
@@ -842,6 +941,8 @@ def process_sm64_objects(obj, area, rootMatrix, transformMatrix, specialsOnly):
                         get_act_string(obj),
                     )
                 )
+            elif obj.fast64.sm64.hackerSM64.is_moving_platform_object:
+                process_moving_platform_object(obj, area, translation, rotation)
             elif obj.sm64_obj_type == "Macro":
                 macro = obj.sm64_macro_enum if obj.sm64_macro_enum != "Custom" else obj.sm64_obj_preset
                 area.macros.append(
@@ -1383,7 +1484,34 @@ class SM64ObjectPanel(bpy.types.Panel):
             self.draw_inline_obj(box, obj)
 
         elif obj.sm64_obj_type == "None":
-            box.box().label(text="This can be used as an empty transform node in a geolayout hierarchy.")
+            if not obj.fast64.sm64.room.draw(box.box(), context):
+                b2 = box.box()
+                b2.prop(obj, "ignore_render", text="Ignore heirarchy in geolayout.")
+                if not context.scene.fast64.sm64.showHackerSM64Options:
+                    b2.label(text = 'This can be used as an empty transform node in a geolayout hierarchy.')
+                else:
+                    b2.box().label(text="HackerSM64 Properties")
+                    self.draw_hackerSM64_props(box.box(), obj)
+
+    def draw_hackerSM64_props(self, box: bpy.types.UILayout, obj):
+        hackerSM64Props = obj.fast64.sm64.hackerSM64
+        prop_split(box, hackerSM64Props, 'is_moving_platform_object', 'Use as moving platform object.')
+
+        if hackerSM64Props.is_moving_platform_object:
+            prop_split(box, hackerSM64Props, 'moving_platform_geo_ref', 'Moving Platform Geo Root')
+            warning_box = box.box()
+            warning_box.alert = True
+            warning_box.label(text="Referenced object's name will be used to create a folder/geo in your level's main directory")
+
+            prop_split(box, obj, 'sm64_behaviour_enum', 'Behaviour')
+            if obj.sm64_behaviour_enum == 'Custom':
+                prop_split(box, obj, 'sm64_obj_behaviour', 'Behaviour Name')
+            box.operator(SearchBehaviourEnumOperator.bl_idname, icon = 'VIEWZOOM')
+            behaviourLabel = box.box()
+            behaviourLabel.label(text = 'Behaviours defined in include/behaviour_data.h.')
+            behaviourLabel.label(text = 'Actual contents in data/behaviour_data.c.')
+            self.draw_behavior_params(obj, box)
+            self.draw_acts(obj, box)
 
     def draw_acts(self, obj, layout):
         layout.label(text="Acts")
@@ -1774,6 +1902,25 @@ class SM64_LevelProperties(bpy.types.PropertyGroup):
         "(ex. water_skybox, bidw_skybox)",
     )
 
+def poll_is_referencable_geo(self, obj):
+    # TODO: Check if this is a valid check that matches the geolayout exporter
+    return not obj.fast64.sm64.hackerSM64.is_moving_platform_object and (
+        obj.data is not None or obj.sm64_obj_type == 'None'
+    )
+
+class HackerSM64_ObjectProperties(bpy.types.PropertyGroup):
+    name = "HackerSM64: Object Properties"
+    description = "HackerSM64 specific object properties"
+
+    is_moving_platform_object: bpy.props.BoolProperty(
+        name="Is Moving Platform Object",
+        description="This object (and its children) should be a moving platform object. It would be a one time use object",
+        default=False)
+
+    moving_platform_geo_ref: bpy.props.PointerProperty(
+        type=bpy.types.Object,
+        name="Moving Platform Geo Reference",
+        poll=poll_is_referencable_geo)
 
 DEFAULT_BEHAVIOR_PARAMS = "0x00000000"
 
@@ -1830,6 +1977,123 @@ class SM64_GameObjectProperties(bpy.types.PropertyGroup):
             return self.get_combined_bparams()
         return self.bparams
 
+def check_obj_or_any_parent_has_cond(obj: bpy.types.Object, cond_cb: Callable[[bpy.types.Object], bool]):
+    if not cond_cb(obj):
+        if obj.parent:
+            return check_obj_or_any_parent_has_cond(obj.parent, cond_cb)
+        return False
+    return True
+
+
+def check_obj_or_any_child_has_cond(obj: bpy.types.Object, cond_cb: Callable[[bpy.types.Object], bool]):
+    if cond_cb(obj):
+        return True
+    for c in obj.children:
+        if check_obj_or_any_child_has_cond(c, cond_cb):
+            return True
+    return False
+
+
+def poll_room_child(self: "SM64_RoomChildObject", obj: bpy.types.Object):
+    def check_object_is_area(inner_obj: bpy.types.Object):
+        # Should not be an area root
+        return inner_obj.sm64_obj_type == "Area Root"
+
+    def check_object_is_this_empty(inner_obj: bpy.types.Object):
+        # Should not have this room empty as a parent
+        return inner_obj is self.id_data
+
+    def check_object_has_mesh(inner_obj: bpy.types.Object):
+        # Should not be an area root OR should not be the room empty
+        return isinstance(inner_obj.data, bpy.types.Mesh)
+
+    if check_object_is_area(obj) or check_object_is_this_empty(obj) or not obj.parent or obj.sm64_obj_type != "None":
+        return False
+    return (
+        check_obj_or_any_parent_has_cond(obj, check_object_is_area)
+        and not check_obj_or_any_parent_has_cond(obj, check_object_is_this_empty)
+        and check_obj_or_any_child_has_cond(obj, check_object_has_mesh)
+    )
+
+
+class SM64_RoomChildObject(bpy.types.PropertyGroup):
+    obj: bpy.props.PointerProperty(type=bpy.types.Object, name="Export object", poll=poll_room_child)
+
+    def draw(self, layout: bpy.types.UILayout, _data: "SM64_RoomObjectProperties", index: int):
+        row = layout.row(align=True).split(factor=0.15)
+        row.label(text=f" {index}:")
+        row.prop(self, "obj", text="")
+
+
+(
+    BeforeRoom_AddObj,
+    BeforeRoom_RemoveObj,
+    BeforeRoom_MoveObj,
+    BeforeRoom_DrawUIList,
+    draw_before_room_prop_list,
+) = get_collection_classes(
+    "beforeroomlist", ("object.fast64.sm64.room",), ("objects_render_before",), ("objects_render_before_active_index",)
+)
+
+(
+    AfterRoom_AddObj,
+    AfterRoom_RemoveObj,
+    AfterRoom_MoveObj,
+    AfterRoom_DrawUIList,
+    draw_after_room_prop_list,
+) = get_collection_classes(
+    "afterroomlist", ("object.fast64.sm64.room",), ("objects_render_after",), ("objects_render_after_active_index",)
+)
+
+
+class SM64_RoomObjectProperties(bpy.types.PropertyGroup):
+    # Objects that render before the room empties hierarchy
+    objects_render_before: bpy.props.CollectionProperty(type=SM64_RoomChildObject, name="Render Objects Before")
+    objects_render_before_active_index: bpy.props.IntProperty(default=0, name="Render Before Active Index")
+    # Objects that render after the room empties hierarchy
+    objects_render_after: bpy.props.CollectionProperty(type=SM64_RoomChildObject, name="Render Objects After")
+    objects_render_after_active_index: bpy.props.IntProperty(default=0, name="Render After Active Index")
+
+    def draw(self, layout: bpy.types.UILayout, context: bpy.types.Context):
+        this_object: bpy.types.Object = self.id_data
+        if this_object.sm64_obj_type != "None":
+            return False
+        parent: bpy.types.Object = this_object.parent
+        if not check_obj_is_room(this_object):
+            return False
+
+        layout.label(text="This is a room empty.")
+        room_index = 0
+        for i, c_obj in enumerate(parent.children):
+            if c_obj is this_object:
+                room_index = i
+                break
+        if room_index == 0:
+            layout.label(text="The children of this room will be visible in ALL rooms.")
+        else:
+            layout.label(text=f"Room #{room_index}")
+            layout.label(text="Select additional objects to render with this room.")
+        layout.separator(factor=1)
+        layout.label(text="Before hierarchy")
+        draw_before_room_prop_list(layout, context)
+        layout.separator(factor=1)
+        layout.label(text="After hierarchy")
+        draw_after_room_prop_list(layout, context)
+        return True
+
+
+SM64RoomClasses = (
+    SM64_RoomChildObject,
+    BeforeRoom_AddObj,
+    BeforeRoom_RemoveObj,
+    BeforeRoom_MoveObj,
+    BeforeRoom_DrawUIList,
+    AfterRoom_AddObj,
+    AfterRoom_RemoveObj,
+    AfterRoom_MoveObj,
+    AfterRoom_DrawUIList,
+    SM64_RoomObjectProperties,
+)
 
 class SM64_SegmentProperties(bpy.types.PropertyGroup):
     seg5_load_custom: bpy.props.StringProperty(name="Segment 5 Seg")
@@ -1895,6 +2159,9 @@ class SM64_ObjectProperties(bpy.types.PropertyGroup):
     area: bpy.props.PointerProperty(type=SM64_AreaProperties)
     game_object: bpy.props.PointerProperty(type=SM64_GameObjectProperties)
     segment_loads: bpy.props.PointerProperty(type=SM64_SegmentProperties)
+    room: bpy.props.PointerProperty(type=SM64_RoomObjectProperties)
+
+    hackerSM64: bpy.props.PointerProperty(type=HackerSM64_ObjectProperties)
 
     @staticmethod
     def upgrade_changed_props():
@@ -1907,6 +2174,7 @@ class SM64_ObjectProperties(bpy.types.PropertyGroup):
 
 
 sm64_obj_classes = (
+    *SM64RoomClasses,
     WarpNodeProperty,
     AddWarpNode,
     RemoveWarpNode,
@@ -1917,6 +2185,7 @@ sm64_obj_classes = (
     StarGetCutscenesProperty,
     PuppycamProperty,
     PuppycamSetupCamera,
+    HackerSM64_ObjectProperties,
     SM64_GeoASMProperties,
     SM64_LevelProperties,
     SM64_AreaProperties,

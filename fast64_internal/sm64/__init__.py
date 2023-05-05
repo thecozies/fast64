@@ -155,6 +155,7 @@ class SM64_MenuVisibilityPanel(SM64_Panel):
 
         prop_split(col, sm64Props, "goal", "Export goal")
         prop_split(col, sm64Props, "showImportingMenus", "Show Importing Options")
+        prop_split(col, sm64Props, 'showHackerSM64Options', 'Show HackerSM64 Options/Features')
 
 
 class SM64_FileSettingsPanel(SM64_Panel):
@@ -221,6 +222,8 @@ class SM64_Properties(PropertyGroup):
     showImportingMenus: BoolProperty(name="Show Importing Menus", default=False)
     exportType: EnumProperty(items=enumExportType, name="Export Type", default="C")
     goal: EnumProperty(items=sm64GoalTypeEnum, name="Export Goal", default="All")
+
+    showHackerSM64Options: bpy.props.BoolProperty(name='Show HackerSM64 Specific Options', default=True)
 
     # TODO: Utilize these across all exports
     # C exporting

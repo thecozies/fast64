@@ -4,7 +4,7 @@ from bpy.utils import register_class, unregister_class
 from ..panels import SM64_Panel
 from ..operators import ObjectDataExporter
 from .sm64_constants import cameraTriggerNames, levelIDNames, enumLevelNames
-from .sm64_objects import exportAreaCommon, backgroundSegments
+from .sm64_objects import exportAreaCommon, backgroundSegments, get_moving_platform_vars
 from .sm64_collision import exportCollisionCommon
 from .sm64_f3d_writer import SM64Model, SM64GfxFormatter
 from .sm64_geolayout_writer import setRooms, convertObjectToGeolayout
@@ -31,6 +31,7 @@ from ..utility import (
     decompFolderMessage,
     makeWriteInfoBox,
     writeMaterialFiles,
+    c_func,
 )
 
 from ..f3d.f3d_gbi import (
@@ -696,9 +697,120 @@ class SM64OptionalFileStatus:
         self.cameraC = False
         self.starSelectC = False
 
+def dedup_objects(objects: list[bpy.types.Object]) -> list[bpy.types.Object]:
+    dedupedObjects: list[bpy.types.Object] = []
+    if len(objects) > 0:
+        objNames = set()
+        for platformObj in objects:
+            if platformObj.name in objNames:
+                continue
+            objNames.add(platformObj.name)
+            dedupedObjects.append(platformObj)
+    return dedupedObjects
+
+class PlatformObjectProcessor():
+    def __init__(
+        self,
+        objects: list[bpy.types.Object],
+        fModel: SM64Model,
+        isHWv1: bool,
+        f3dType: str, # see enumF3D
+        transformMatrix: mathutils.Matrix,
+        levelName: str,
+        levelDir: str,
+        exportDir: str,
+        savePNG: bool
+    ) -> None:
+        self.objects = objects
+        self.fModel = fModel
+        self.isHWv1 = isHWv1
+        self.f3dType = f3dType
+        self.transformMatrix = transformMatrix
+        self.levelName = levelName
+        self.levelDir = levelDir
+        self.exportDir = exportDir
+        self.savePNG = savePNG
+
+        self.level_incs = []
+        self.geo_incs = []
+        self.header_incs = []
+
+    def convert_platform_object(self, obj: bpy.types.Object):
+        applyRotation([obj], math.radians(90), "X")
+
+        baseName, geoName, _collisionName = get_moving_platform_vars(obj, self.levelName)
+        geoDir = os.path.join(self.levelDir, baseName)
+        if not os.path.exists(geoDir):
+            os.mkdir(geoDir)
+
+        geolayoutGraph, self.fModel = convertObjectToGeolayout(
+            obj,
+            self.transformMatrix,
+            self.f3dType,
+            self.isHWv1,
+            None, # camera
+            baseName,
+            self.fModel,
+            None,
+            DLFormat,
+            not self.savePNG
+        )
+
+        geolayoutGraphC = geolayoutGraph.to_c()
+
+        # Write geolayout
+        with open(os.path.join(geoDir, "geo.inc.c"), "w", newline="\n") as geoFile:
+            geoFile.write(geolayoutGraphC.source)
+
+        geo_inc_filename = '/'.join(["levels", self.levelName, baseName, "geo.inc.c"])
+        self.geo_incs.append(f'#include "{geo_inc_filename}"')
+        self.header_incs.append(geolayoutGraphC.header)
+
+        # Write collision
+        collision = exportCollisionCommon(
+            obj,
+            self.transformMatrix,
+            False, True,
+            baseName, None
+        )
+        collisionC = collision.to_c()
+        with open(os.path.join(geoDir, "collision.inc.c"), "w", newline="\n") as colFile:
+            colFile.write(collisionC.source)
+        self.header_incs.append(collisionC.header)
+
+        col_inc_filename = '/'.join(["levels", self.levelName, baseName, "collision.inc.c"])
+        self.level_incs.append(f'#include "{col_inc_filename}"\n')
+
+        applyRotation([obj], math.radians(-90), "X")
+
+    def add_platform_objects_to_model(self):
+        """
+            populates c data for self.level_incs, self.geo_incs, and self.header_incs,
+            as well as writing the base files
+        """
+        for obj in self.objects:
+            self.convert_platform_object(obj)
+
+    def get_level_incs(self):
+        return "\n".join(["", *self.level_incs,""])
+
+    def get_geo_incs(self):
+        return "\n".join(["", *self.geo_incs,""])
+
+    def get_header_incs(self):
+        return "\n".join(["", *self.header_incs,""])
 
 def exportLevelC(
-    obj, transformMatrix, f3dType, isHWv1, levelName, exportDir, savePNG, customExport, levelCameraVolumeName, DLFormat
+    obj: bpy.types.Object, # level root
+    transformMatrix: mathutils.Matrix,
+    f3dType: str, # see enumF3D
+    isHWv1: bool,
+    levelName: str,
+    exportDir: str,
+    savePNG: bool,
+    customExport: bool,
+    levelCameraVolumeName: str,
+    DLFormat: DLFormat
 ):
 
     fileStatus = SM64OptionalFileStatus()
@@ -706,7 +818,7 @@ def exportLevelC(
     if customExport:
         levelDir = os.path.join(exportDir, levelName)
     else:
-        levelDir = os.path.join(exportDir, "levels/" + levelName)
+        levelDir = os.path.join(exportDir, "levels", levelName)
 
     if customExport or not os.path.exists(os.path.join(levelDir, "script.c")):
         prevLevelScript = LevelScript(levelName)
@@ -733,6 +845,7 @@ def exportLevelC(
     usesEnvFX = False
     echoLevels = ["0x00", "0x00", "0x00"]
     zoomFlags = [False, False, False, False]
+    platformObjects: 'list[bpy.types.Object]' = []
 
     if bpy.context.scene.exportHiddenGeometry:
         hiddenState = unhideAllAndGetHiddenState(bpy.context.scene)
@@ -746,6 +859,8 @@ def exportLevelC(
         #    raise PluginError(child.name + ' does not have an area camera set.')
         # setOrigin(obj, child)
         areaDict[child.areaIndex] = child
+
+        child["tmp__levelName"] = levelName
 
         areaIndex = child.areaIndex
         areaName = "area_" + str(areaIndex)
@@ -811,10 +926,7 @@ def exportLevelC(
         )
         if area.mario_start is not None:
             prevLevelScript.marioStart = area.mario_start
-        persistentBlockString = prevLevelScript.get_persistent_block(
-            PersistentBlocks.areaCommands, nTabs=2, areaIndex=str(area.index)
-        )
-        areaString += area.to_c_script(child.enableRoomSwitch, persistentBlockString=persistentBlockString)
+
         cameraVolumeString += area.to_c_camera_volumes()
         puppycamVolumeString += area.to_c_puppycam_volumes()
 
@@ -827,12 +939,23 @@ def exportLevelC(
         headerString += macrosC.header
 
         # Write splines
-        splineFile = open(os.path.join(areaDir, "spline.inc.c"), "w", newline="\n")
-        splinesC = area.to_c_splines()
-        splineFile.write(splinesC.source)
-        splineFile.close()
-        levelDataString += '#include "levels/' + levelName + "/" + areaName + '/spline.inc.c"\n'
-        headerString += splinesC.header
+        splineCommands = []
+        with open(os.path.join(areaDir, "spline.inc.c"), "w", newline="\n") as splineFile:
+            splinesC, traj_array = area.to_c_splines()
+            splineFile.write(splinesC.source)
+            levelDataString += '#include "levels/' + levelName + "/" + areaName + '/spline.inc.c"\n'
+            headerString += splinesC.header
+            splineCommands = [c_func("AREA_SPLINE", [t]) for t in traj_array]
+
+        persistentBlockString = prevLevelScript.get_persistent_block(
+            PersistentBlocks.areaCommands, nTabs=2, areaIndex=str(area.index)
+        )
+
+        areaString += area.to_c_script(child.enableRoomSwitch, persistentBlockString=persistentBlockString, splineCommands=splineCommands)
+
+        for sm64_obj in area.objects:
+            if hasattr(sm64_obj, 'obj_ref') and sm64_obj.obj_ref is not None:
+                platformObjects.append(sm64_obj.obj_ref)
 
     cameraVolumeString += "\tNULL_TRIGGER\n};"
 
@@ -881,6 +1004,21 @@ def exportLevelC(
                     existingArea = True
             if not existingArea:
                 shutil.rmtree(os.path.join(levelDir, f))
+
+    pop = PlatformObjectProcessor(
+        dedup_objects(platformObjects),
+        fModel,
+        isHWv1,
+        f3dType,
+        transformMatrix,
+        levelName,
+        levelDir,
+        exportDir,
+        savePNG)
+    pop.add_platform_objects_to_model()
+    levelDataString += pop.get_level_incs()
+    headerString += pop.get_header_incs()
+    geoString += pop.get_geo_incs()
 
     gfxFormatter = SM64GfxFormatter(ScrollMethod.Vertex)
     exportData = fModel.to_c(TextureExportSettings(savePNG, savePNG, "levels/" + levelName, levelDir), gfxFormatter)

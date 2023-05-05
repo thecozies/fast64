@@ -841,7 +841,7 @@ def store_original_meshes(add_warning: Callable[[str], None]):
     instanced_meshes = set()
     active_obj = bpy.context.view_layer.objects.active
     for obj in yield_children(active_obj):
-        if obj.data is not None:
+        if obj.data is not None and type(obj.data) == bpy.types.Mesh:
             has_modifiers = len(obj.modifiers) != 0
             has_uneven_scale = not obj_scale_is_unified(obj)
             shares_mesh = obj.data.users > 1
@@ -955,6 +955,9 @@ def checkIsSM64InlineGeoLayout(sm64_obj_type):
 
 enumSM64EmptyWithGeolayout = {"None", "Level Root", "Area Root", "Switch"}
 
+def check_sm64_empty_references_object(obj: bpy.types.Object):
+    return bpy.context.scene.fast64.sm64.showHackerSM64Options and obj.fast64.sm64.hackerSM64.is_moving_platform_object
+
 
 def checkSM64EmptyUsesGeoLayout(sm64_obj_type):
     return sm64_obj_type in enumSM64EmptyWithGeolayout or checkIsSM64InlineGeoLayout(sm64_obj_type)
@@ -966,7 +969,12 @@ def selectMeshChildrenOnly(obj, ignoreAttr, includeEmpties, areaIndex):
         return
     ignoreObj = ignoreAttr is not None and getattr(obj, ignoreAttr)
     isMesh = isinstance(obj.data, bpy.types.Mesh)
-    isEmpty = obj.data is None and includeEmpties and checkSM64EmptyUsesGeoLayout(obj.sm64_obj_type)
+    isEmpty = (
+        obj.data is None
+        and includeEmpties
+        and not check_sm64_empty_references_object(obj)
+        and checkSM64EmptyUsesGeoLayout(obj.sm64_obj_type)
+    )
     if (isMesh or isEmpty) and not ignoreObj:
         obj.select_set(True)
         obj.original_name = obj.name
@@ -1454,6 +1462,8 @@ def read16bitRGBA(data):
 def join_c_args(args: "list[str]"):
     return ", ".join(args)
 
+def c_func(func_name: str, args: 'list[str]'):
+    return f'{func_name}({join_c_args(args)})'
 
 def translate_blender_to_n64(translate: mathutils.Vector):
     return transform_mtx_blender_to_n64() @ translate
