@@ -192,6 +192,27 @@ def convertAllBSDFtoF3D(objs, renameUV):
                     print("New material")
                     convertBSDFtoF3D(obj, index, material, materialDict)
 
+def detect_mat_settings(material: bpy.types.Material, tex: bpy.types.Image):
+    rounded_alpha = set()
+    if tex.channels == 4:
+        pixels = tex.pixels[:]
+        for i in range(len(pixels) // 4):
+            rounded_alpha.add(round(pixels[i*4 + 3] * 8))
+
+    tex_edge = False
+    xlu = False
+    trans_tex = False
+    if len(rounded_alpha) >= 2:
+        tex_edge = True
+        trans_tex = True
+
+    alpha = round(material.node_tree.nodes["Principled BSDF"].inputs["Alpha"].default_value * 255)
+    if alpha != 255:
+        xlu = True
+    
+    if not xlu and trans_tex:
+        tex_edge
+    return tex_edge, xlu, trans_tex, alpha
 
 def convertBSDFtoF3D(obj, index, material, materialDict):
     if not material.use_nodes:
@@ -223,11 +244,42 @@ def convertBSDFtoF3D(obj, index, material, materialDict):
                         )
                 else:
                     presetName = getDefaultMaterialPreset("Shaded Texture")
+
+                tex = tex0Node.links[0].from_node.image
+                tex_edge, xlu, trans_tex, alpha = detect_mat_settings(material, tex)
+
                 newMaterial = createF3DMat(obj, preset=presetName, index=index)
-                f3dMat = newMaterial.f3d_mat if newMaterial.mat_ver > 3 else newMaterial
-                f3dMat.tex0.tex = tex0Node.links[0].from_node.image
+                f3dMat = newMaterial.f3d_mat
+                f3dMat.tex0.tex = tex
                 if len(tex1Node.links) > 0 and isinstance(tex1Node.links[0].from_node, bpy.types.ShaderNodeTexImage):
                     f3dMat.tex1.tex = tex1Node.links[0].from_node.image
+
+                c1 = f3dMat.combiner1
+                c2 = f3dMat.combiner2
+                c1.A_alpha = c2.A_alpha = \
+                    c1.B_alpha = c2.B_alpha = \
+                        c1.C_alpha = c2.C_alpha = \
+                            c1.D_alpha = c2.D_alpha = "0"
+
+                if trans_tex and not xlu:
+                    c1.D_alpha = c2.D_alpha = "TEXEL0"
+                elif xlu:
+                    f3dMat.set_prim = True
+                    f3dMat.prim_color[3] = alpha / 255
+                    if not trans_tex:
+                        c1.D_alpha = c2.D_alpha = "PRIMITIVE"
+                    else:
+                        c1.A_alpha = c2.A_alpha = "TEXEL0"
+                        c1.C_alpha = c2.C_alpha = "PRIMITIVE"
+
+                if tex_edge:
+                    f3dMat.draw_layer.sm64 = "4"
+                if xlu:
+                    f3dMat.draw_layer.sm64 = "5"
+                
+                if trans_tex or tex_edge or xlu:
+                    f3dMat.presetName = "Custom"
+
                 updateMatWithName(newMaterial, material, materialDict)
             else:
                 print("Principled BSDF material does not have an Image Node attached to its Base Color.")
