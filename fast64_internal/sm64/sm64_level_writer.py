@@ -820,7 +820,7 @@ def exportLevelC(
     else:
         levelDir = os.path.join(exportDir, "levels", levelName)
 
-    if customExport or not os.path.exists(os.path.join(levelDir, "script.c")):
+    if not os.path.exists(os.path.join(levelDir, "script.c")):
         prevLevelScript = LevelScript(levelName)
     else:
         prevLevelScript = parseLevelScript(levelDir, levelName)
