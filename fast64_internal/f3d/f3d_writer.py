@@ -1240,7 +1240,7 @@ def getTexDimensions(material):
     return texDimensions
 
 
-def saveOrGetF3DMaterial(material, fModel, obj, drawLayer, convertTextureData):
+def saveOrGetF3DMaterial(material, fModel: FModel, obj, drawLayer, convertTextureData):
     print(f"Writing material {material.name}")
     if material.mat_ver > 3:
         f3dMat = material.f3d_mat
@@ -1392,8 +1392,17 @@ def saveOrGetF3DMaterial(material, fModel, obj, drawLayer, convertTextureData):
     # Checking for f3dMat.rdp_settings.g_lighting here will prevent accidental exports,
     # There may be some edge case where this isn't desired.
     if useDict["Shade"] and f3dMat.set_lights and f3dMat.rdp_settings.g_lighting:
-        fLights = saveLightsDefinition(fModel, fMaterial, f3dMat, materialName + "_lights")
-        fMaterial.mat_only_DL.commands.extend([SPSetLights(fLights)])  # TODO: handle synching: NO NEED?
+        light_name = f"{materialName}_lights"
+        does_scroll = False
+        if fMaterial.tileSizeCommands[0] or fMaterial.tileSizeCommands[1]:
+            does_scroll = True
+            light_name += "_ext"
+            
+        fLights = saveLightsDefinition(fModel, fMaterial, f3dMat, light_name)
+        if does_scroll:
+            fMaterial.mat_only_DL.commands.extend([SPDisplayList(fLights.get_separated_dl())])  # TODO: handle synching: NO NEED?
+        else:
+            fMaterial.mat_only_DL.commands.extend([SPSetLights(fLights)])  # TODO: handle synching: NO NEED?
 
     if useDict["Key"] and f3dMat.set_key:
         if material.mat_ver == 4:
@@ -1461,7 +1470,7 @@ def saveOrGetF3DMaterial(material, fModel, obj, drawLayer, convertTextureData):
     return fMaterial, texDimensions
 
 
-def saveLightsDefinition(fModel, fMaterial, material, lightsName):
+def saveLightsDefinition(fModel: FModel, fMaterial, material, lightsName):
     lights = fModel.getLightAndHandleShared(lightsName)
     if lights is not None:
         return lights

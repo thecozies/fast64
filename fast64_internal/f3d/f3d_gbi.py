@@ -3072,8 +3072,11 @@ class Lights:
     def __init__(self, name):
         self.name = name
         self.startAddress = 0
-        self.a = None
-        self.l = []
+        self.a: Ambient = None
+        self.l: list[Light] = []
+        self.ext_dl: GfxList = None
+        # denotes if the light DL is on its own
+        # self.separate = False
 
     def set_addr(self, startAddress):
         startAddress = get64bitAlignedAddr(startAddress)
@@ -3103,6 +3106,18 @@ class Lights:
                 data += self.l[i].to_binary()
         return data
 
+    def get_separated_dl_name(self):
+        return f'{self.name}_dl'
+
+    def get_separated_dl(self) -> GfxList:
+        if self.ext_dl:
+            return self.ext_dl
+        self.ext_dl = GfxList(self.get_separated_dl_name(), GfxListTag.Draw, DLFormat.Static)
+        self.ext_dl.commands.append(SPSetLights(self))
+        self.ext_dl.commands.append(SPEndDisplayList())
+        
+        return self.ext_dl
+
     def to_c(self):
         data = CData()
         data.header = f"extern Lights{str(len(self.l))} {self.name};\n"
@@ -3111,6 +3126,13 @@ class Lights:
         for light in self.l:
             data.source += ",\n\t" + light.to_c()
         data.source += ");\n\n"
+
+        if self.ext_dl:
+            data.append(self.ext_dl.to_c(get_F3D_GBI()))
+        #     ext_dl = GfxList(self.get_separated_dl_name(), GfxListTag.Draw, DLFormat.Static)
+        #     ext_dl.commands.append(SPSetLights(self))
+        #     ext_dl.commands.append(SPEndDisplayList())
+        #     data.append(ext_dl.to_c())
         return data
 
 
